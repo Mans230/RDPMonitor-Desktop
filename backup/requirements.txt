@@ -1,0 +1,2 @@
+# Headless ZIP/restic/rclone engines; desktop widgets and Telegram clients are retired.
+pyzipper==0.4.0

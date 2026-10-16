@@ -1,0 +1,5 @@
+psutil==6.1.1
+requests==2.34.2
+matplotlib==3.11.2
+-r backup/requirements.txt
+-r agent/requirements.txt
