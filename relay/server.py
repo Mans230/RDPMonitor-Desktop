@@ -7,6 +7,7 @@ import hmac
 import ipaddress
 import json
 import re
+import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,6 +87,36 @@ async def close_socket(ws: WebSocket | None, code: int = 1000):
         await close_connection(ws, code)
 
 
+class PairingThrottle:
+    """Bounded, fixed-window limit for the one unauthenticated lookup endpoint.
+
+    `GET /api/v1/pairings/{lookup_id}` cannot demand a credential: the holder of
+    the invitation fragment performs the first fetch, so the broker must serve it
+    anonymously. That makes it the only path an unauthenticated caller can drive
+    toward durable storage, so cap it per source address and bound the tracking
+    table itself so the limiter cannot be grown without limit.
+    """
+
+    def __init__(self, *, limit: int = 60, window: int = 60, sources: int = 1024):
+        self.limit = limit
+        self.window = window
+        self.sources = sources
+        self._windows: dict[str, tuple[int, int]] = {}
+
+    def check(self, source: str, now: float) -> None:
+        moment = int(now)
+        if source not in self._windows and len(self._windows) >= self.sources:
+            # Insertion-ordered: drop the oldest tracked source first.
+            self._windows.pop(next(iter(self._windows)), None)
+        start, count = self._windows.get(source, (moment, 0))
+        if moment - start >= self.window:
+            start, count = moment, 0
+        count += 1
+        self._windows[source] = (start, count)
+        if count > self.limit:
+            raise RelayError("pairing_rate_limited", 429)
+
+
 class TransportPolicy:
     """Reject insecure/mismatched origins before consuming secrets or bodies."""
 
@@ -95,12 +126,21 @@ class TransportPolicy:
         self.development = allow_loopback_http and origin.startswith("http://")
         self.active_http = 0
 
+    def _origin_matches(self, origins: list[str]) -> bool:
+        if len(origins) != 1:
+            return False
+        try:
+            return normalize_origin(origins[0], allow_loopback=self.development) == self.origin
+        except (ProtocolError, ValueError):
+            return False
+
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
         headers = scope.get("headers", [])
         hosts = [v.decode("latin1") for k, v in headers if k.lower() == b"host"]
+        origins = [v.decode("latin1") for k, v in headers if k.lower() == b"origin"]
         scheme = {"ws": "http", "wss": "https"}.get(scope["scheme"], scope["scheme"])
         allowed = False
         try:
@@ -114,6 +154,12 @@ class TransportPolicy:
         error = None
         if not allowed:
             error = RelayError("https_origin_required", 400)
+        elif scope["type"] == "websocket" and origins and not self._origin_matches(origins):
+            # Browsers always attach Origin to a WebSocket handshake, so a
+            # mismatched or duplicated value is a cross-site attempt rather than
+            # our client. The first-party agent and desktop clients send no
+            # Origin header and are unaffected by this branch.
+            error = RelayError("origin_not_allowed", 403)
         elif scope.get("query_string"):
             error = RelayError("query_parameters_not_supported", 400)
         elif scope["type"] == "websocket" and EXTENSION not in scope.get("extensions", {}):
@@ -171,6 +217,7 @@ class Runtime:
         self.limits = limits
         self.controls: dict[str, Control] = {}
         self.streams: dict[str, Stream] = {}
+        self.pairing_throttle = PairingThrottle()
         self.stopping = False
 
     def add_control(self, route_id: str, ws: WebSocket) -> Control:
@@ -501,7 +548,9 @@ def create_app(database: str | Path, *, public_origin: str, admin_key: str,
         return {"published": True}
 
     @app.get("/api/v1/pairings/{lookup_id}")
-    async def pairing(lookup_id: str):
+    async def pairing(lookup_id: str, request: Request):
+        peer = request.client
+        runtime().pairing_throttle.check(peer.host if peer is not None else "unknown", time.time())
         return runtime().store.pairing(lookup(lookup_id))
 
     @app.websocket("/api/v1/agents/{route_id}/control")

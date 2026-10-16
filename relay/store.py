@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from uuid import uuid4
 
@@ -37,10 +37,18 @@ class Limits:
     pending_control: int = 64
 
     def __post_init__(self):
-        maxima = (256, 128, 32, 32, 16, 256, 64)
-        for value, maximum in zip(vars(self).values(), maxima):
+        # One explicit bound per field. Deriving the maxima from the field list
+        # keeps a newly added limit bounded by default instead of silently
+        # sharing (or escaping) an existing ceiling through a short zip.
+        maxima = {"agents": 256, "invitations": 128, "grants_per_route": 32,
+                  "pairings_per_route": 32, "streams_per_route": 16, "streams": 256,
+                  "pending_control": 64}
+        if {field.name for field in fields(self)} != set(maxima):
+            raise ValueError("Relay limits must declare exactly one bound per field.")
+        for name, maximum in maxima.items():
+            value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= maximum:
-                raise ValueError("Relay limits must be positive and cannot exceed protocol bounds.")
+                raise ValueError(f"Relay limit {name} must be a positive integer no greater than {maximum}.")
 
 
 class Store:
@@ -207,11 +215,13 @@ class Store:
             return row["grant_id"]
 
     def grants(self, route_id: str) -> list[dict]:
-        with self._transaction() as db:
-            self._prune(db, int(time.time()))
-            if db.execute("SELECT 1 FROM agents WHERE route_id=?", (route_id,)).fetchone() is None:
+        # Read path: still prune opportunistically, but never take the write lock
+        # (BEGIN IMMEDIATE) that a durable capability mutation would need.
+        with self._mutex:
+            self._prune(self.db, int(time.time()))
+            if self.db.execute("SELECT 1 FROM agents WHERE route_id=?", (route_id,)).fetchone() is None:
                 raise RelayError("route_not_found", 404)
-            return [dict(row) for row in db.execute(
+            return [dict(row) for row in self.db.execute(
                 "SELECT grant_id,created_at,activated_at,revoked FROM grants WHERE route_id=? "
                 "ORDER BY created_at,grant_id", (route_id,))]
 
