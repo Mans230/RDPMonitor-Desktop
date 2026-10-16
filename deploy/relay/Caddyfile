@@ -1,0 +1,29 @@
+{
+	email {$RDP_RELAY_ACME_EMAIL}
+	admin off
+	# No request/URI/header logging, including reverse-proxy error context.
+	log default {
+		output discard
+	}
+}
+
+{$RDP_RELAY_HOST} {
+	# Caddy obtains and renews publicly trusted certificates. Do not use tls
+	# internal or tls_insecure_skip_verify for a public relay.
+	log {
+		output discard
+	}
+	request_body {
+		max_size 16KB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Cache-Control no-store
+	}
+	reverse_proxy relay:8765 {
+		# WebSocket upgrades and binary frames pass through unchanged.
+		# No retry policy: an interrupted stream is never replayed.
+		flush_interval -1
+	}
+}

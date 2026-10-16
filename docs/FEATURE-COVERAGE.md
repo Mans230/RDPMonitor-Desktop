@@ -101,6 +101,7 @@ This is a source-to-catalog migration ledger, not a claim that every destructive
 - Incoming files: bounded resumable upload staging and SHA-256/no-overwrite commit, controlled by live upload and approved-root policies.
 - ZIP/restic configuration, missing-source enforcement, VSS, hooks, retention, cloud OAuth/credentials, actual restore verification and isolated drills.
 - Durable jobs, cancellation, per-job encrypted configuration snapshots, encrypted off-host recovery export/import, device renewal/revocation and cursor-based event history.
+- Install-anywhere Windows setup: outward-only self-hosted relay, private encrypted connection-code enrollment, OS-protected routing, native installation/pairing/repair wizard and distinct monitoring-only unsigned preview. Existing HTTPS/mTLS, role enforcement and live certificate revocation remain authoritative through the tunnel; public hosting, production signing and installed clean-VM acceptance are separate prerequisites.
 - APNs/FCM sender integration, protected target registration and persistent inbox/outbox. Actual provider credentials and signed mobile device setup are external prerequisites.
 
 ## Safety and platform boundaries

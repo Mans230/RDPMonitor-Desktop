@@ -1,14 +1,15 @@
 name: rdpmonitor
 description: Native RDPMonitor machine management client.
 publish_to: none
-version: 1.0.0+1
+version: 1.0.0+2
 environment:
-  sdk: ^3.10.0
+  sdk: ^3.13.0
 dependencies:
   flutter:
     sdk: flutter
   basic_utils: ^5.8.2
   crypto: ^3.0.6
+  pointycastle: 4.0.0
   flutter_secure_storage: ^9.2.4
   flutter_local_notifications: ^19.5.0
   file_selector: ^1.0.4
