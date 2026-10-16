@@ -108,7 +108,8 @@ DEFAULT_CONFIG = {
         "require_all_sources": True,       # Abort (fail closed) if a configured source is missing
         "pre_command": "",                 # A command that is run before copying (Example: Export a database)
         "post_command": "",                # A command to run after copying (Always, even when you fail)
-        "hook_timeout_minutes": 60
+        "hook_timeout_minutes": 60,
+        "hooks_enabled": True              # Master switch: pre/post commands run with the worker's own identity
     },
     "schedule": {
         "enabled": False,

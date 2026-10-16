@@ -21,10 +21,11 @@ from pathlib import Path
 
 from .certificates import (agent_identity, protect_path, protect_secret,
                            protected_directory, protected_data_directory, reject_links, timestamp, unprotect_secret, utcnow)
-from .contracts import OperationError, TERMINAL_STATES
+from .contracts import OperationError, SECRET_ENVELOPE_WORDS, TERMINAL_STATES, secret_named
 
 MAX_JSON_BYTES = 4 * 1024 * 1024
-_SECRET_KEYS = {"password", "passwd", "secret", "token", "credential", "private_key", "api_key", "authorization", "csr", "code", "nonce"}
+# Durable event/audit payloads share one definition with the job transport.
+_SECRET_KEYS = SECRET_ENVELOPE_WORDS
 _STATES = {"queued", "running", "cancelling", *TERMINAL_STATES}
 _TRANSITIONS = {
     "queued": {"running", "cancelled", "failed", "interrupted"},
@@ -75,7 +76,7 @@ def redact(value):
     """Validate before traversing, then redact ordinary event/audit payloads."""
     def visit(item):
         if isinstance(item, dict):
-            return {key: "[redacted]" if any(word in key.lower() for word in _SECRET_KEYS) else visit(child)
+            return {key: "[redacted]" if secret_named(key, _SECRET_KEYS) else visit(child)
                     for key, child in item.items()}
         if isinstance(item, list):
             return [visit(child) for child in item]

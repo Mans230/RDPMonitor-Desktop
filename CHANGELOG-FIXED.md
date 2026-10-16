@@ -45,3 +45,29 @@ that architectural limitation is documented rather than hidden.
 - Escaped dynamic dashboard content and removed external Google Fonts.
 - Added validated IP operations, verified unblock behavior, and cross-process blocklist lock.
 - Added WebConsole security regression tests.
+
+## Desktop agent: network monitoring and hardening
+
+- Added agent-owned network reachability monitoring. The worker probes `ping_target`
+  (default `1.1.1.1`) over TCP about every 60 seconds while `net_watch` is enabled,
+  debounces the result, and records durable `network.down`/`network.up` events (with the
+  outage duration) that feed the client inbox and any configured push provider. The state
+  is exposed through the `monitoring.network_health` operation and the `network` block in
+  `snapshot` and `health`.
+- The client now shows reachability: a status pill in the machine bar and a reachability
+  block in the Overview network panel.
+- The Overview network panel gained a one-click reachability switch. It reads and rewrites
+  only `net_watch` against the current configuration revision, so it can never clobber
+  unrelated monitor settings; the full editor in Settings still exposes the same key with
+  its surrounding context.
+- Monitor configuration is fail-closed. Any editable field whose name reads as credential
+  material is excluded from the readable and writable configuration surface, so a newly
+  introduced secret cannot silently become exportable or settable.
+- The job transport, durable events and audit records share one secret-name definition.
+- The update-availability comparison uses SHA-256 instead of MD5.
+- Backup pre/post hooks gained a `hooks_enabled` master switch (default on), refuse a
+  command containing a NUL byte, and are logged by SHA-256 fingerprint instead of the
+  command text, which may embed credentials.
+- Reorganized client navigation: Diagnostics moved under Observe and Imaging moved under
+  Manage, with the grouping rationale documented in code.
+- Added network-watch and hardening regression tests to `tests/`.

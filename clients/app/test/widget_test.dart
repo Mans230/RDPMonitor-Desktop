@@ -42,4 +42,14 @@ void main() {
     await tester.pump();
     expect(changed, isTrue);
   });
+  test('Reachability toggle edits only net_watch and never mutates its input', () {
+    final original = <String, dynamic>{'net_watch': false, 'ping_target': '9.9.9.9', 'cpu_alert_pct': 80};
+    final enabled = withNetworkWatch(original, true);
+    expect(enabled['net_watch'], isTrue);
+    expect(enabled['ping_target'], '9.9.9.9');
+    expect(enabled['cpu_alert_pct'], 80);
+    expect(enabled, isNot(same(original)));
+    expect(original['net_watch'], isFalse, reason: 'the live configuration map must not be mutated');
+    expect(withNetworkWatch(original, false)['net_watch'], isFalse);
+  });
 }

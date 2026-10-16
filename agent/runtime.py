@@ -18,17 +18,20 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .contracts import API_VERSION, VERSION, TERMINAL_STATES, ExecutionContext, OperationError, field, operation, public_artifact
+from .contracts import (API_VERSION, TERMINAL_STATES, VERSION, ExecutionContext, OperationError,
+                        field, operation, public_artifact, secret_named)
+from .network import NetworkWatch, tcp_reachable
 
 log = logging.getLogger(__name__)
 CONFIG_DOMAINS = ("monitor", "backup", "files", "notifications")
-_SECRET_WORDS = ("password", "passphrase", "secret", "token", "private_key", "credential", "api_hash")
+NETWORK_CHECK_SECONDS = 60.0
+NETWORK_PROBE_TIMEOUT = 3.0
 
 
 def _redact(value: Any, names: set[str] | None = None) -> Any:
     names = names or set()
     if isinstance(value, dict):
-        return {key: ("***" if str(key) in names or any(word in str(key).lower() for word in _SECRET_WORDS)
+        return {key: ("***" if str(key) in names or secret_named(key)
                       else _redact(item, names)) for key, item in value.items()}
     if isinstance(value, list):
         return [_redact(item, names) for item in value]
@@ -66,6 +69,14 @@ class AgentRuntime:
         self._worker_lock = None
         self._last_sample = 0.0
         self._sampling_error: str | None = None
+        # Network reachability is owned here: the telemetry thread probes the
+        # configured target and records transitions. The probe is injectable so
+        # the watch can be exercised without real sockets.
+        self.network = NetworkWatch()
+        self.network_probe = tcp_reachable
+        self.network_interval = NETWORK_CHECK_SECONDS
+        self.network_timeout = NETWORK_PROBE_TIMEOUT
+        self._network_last = 0.0
         self._definitions: dict[str, dict] = {}
         for descriptor in self.backend.catalog():
             identifier = descriptor["id"]
@@ -77,6 +88,10 @@ class AgentRuntime:
                            "files", fields=[field("upload_id", "Upload ID", required=True)])
         upload["hidden"] = True
         self._definitions[upload["id"]] = upload
+        self._definitions["monitoring.network_health"] = operation(
+            "monitoring.network_health", "Network reachability", "monitoring",
+            "Current up/down state of the configured reachability target (ping_target), "
+            "including the last transition and outage duration.", "view")
         self.backend.set_submitter(self._submit_scheduled)
 
     def start(self) -> None:
@@ -158,7 +173,41 @@ class AgentRuntime:
         return {"agent_id": identity["id"], "name": identity["name"], "version": VERSION,
                 "api_version": API_VERSION, "timestamp": time.time(), "read_only": self.read_only,
                 "running": self._started, "last_sample": self._last_sample,
-                "telemetry_error": self._sampling_error, "config_domains": list(CONFIG_DOMAINS)}
+                "telemetry_error": self._sampling_error, "network": self.network.status(),
+                "config_domains": list(CONFIG_DOMAINS)}
+
+    def _network_tick(self) -> None:
+        """Probe the configured target and record a durable transition event."""
+        if self.read_only:
+            return
+        now = time.time()
+        if now - self._network_last < self.network_interval:
+            return
+        self._network_last = now
+        try:
+            config = self.backend.get_config("monitor")["value"]
+        except Exception:
+            return
+        if not config.get("net_watch", True):
+            return
+        target = str(config.get("ping_target") or "1.1.1.1")
+        try:
+            reachable = bool(self.network_probe(target, self.network_timeout))
+        except Exception:
+            reachable = False
+        state = self.network.evaluate(reachable, now, target=target)
+        if not state.get("changed"):
+            return
+        if state["state"] == "down":
+            self.store.append_event("network.down", "Network reachability lost: no response from " + target,
+                                    "error", {"target": target, "down_since": state.get("down_since")})
+        else:
+            seconds = int(state.get("seconds_down") or 0)
+            minutes = max(1, round(seconds / 60)) if seconds else 0
+            detail = (f"after about {minutes} minute(s)" if seconds else "on the next check")
+            self.store.append_event("network.up", "Network reachability restored " + detail,
+                                    "warning", {"target": target, "seconds_down": seconds})
+
 
     def _sample(self) -> None:
         while not self._stop.is_set():
@@ -176,6 +225,7 @@ class AgentRuntime:
                     log.exception("Telemetry collection failed")
                     self.store.append_event("telemetry.error", "Telemetry collection failed; previous data is stale", "warning")
                 self._sampling_error = "Telemetry collection failed"
+            self._network_tick()
             self._stop.wait(2)
 
     def _actor(self, actor: dict | None, capability: str = "view") -> dict:
@@ -306,6 +356,9 @@ class AgentRuntime:
                     config_snapshot=copy.deepcopy(job.get("config_snapshot")))
                 if job["operation"] == "files.upload":
                     result = self.transfers.commit(actor["id"], job["args"]["upload_id"], context)
+                elif job["operation"] == "monitoring.network_health":
+                    result = {"status": "succeeded", "message": "Network reachability state retrieved",
+                              "data": self.network.status()}
                 else:
                     result = self.backend.execute(job["operation"], copy.deepcopy(job["args"]), context)
                 if not isinstance(result, dict) or result.get("status") not in TERMINAL_STATES:
@@ -406,7 +459,8 @@ class AgentRuntime:
             return {"operations": result}
         if method == "snapshot":
             snapshot = self.backend.latest_snapshot()
-            return dict(snapshot, collection_error=self._sampling_error, read_only=self.read_only)
+            return dict(snapshot, collection_error=self._sampling_error, read_only=self.read_only,
+                        network=self.network.status())
         if method == "history":
             limit = self._limit(params.get("limit"), 1000, 5000)
             return {"items": self.store.metrics(limit=limit)}

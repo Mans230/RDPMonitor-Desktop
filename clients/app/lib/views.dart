@@ -23,6 +23,22 @@ MonitorTone _tone(dynamic value) => switch (value?.toString().toLowerCase()) {
   _ => MonitorTone.neutral,
 };
 
+String networkStateLabel(dynamic state) => switch (state?.toString()) {
+  'up' => 'Network reachable',
+  'down' => 'Network unreachable',
+  _ => 'Checking reachability',
+};
+MonitorTone networkStateTone(dynamic state) => switch (state?.toString()) {
+  'up' => MonitorTone.success,
+  'down' => MonitorTone.danger,
+  _ => MonitorTone.neutral,
+};
+IconData networkStateIcon(dynamic state) => switch (state?.toString()) {
+  'up' => Icons.cloud_done_outlined,
+  'down' => Icons.cloud_off_outlined,
+  _ => Icons.sync_outlined,
+};
+
 class DataTree extends StatelessWidget {
   final dynamic value;
   final String? name;
@@ -85,6 +101,7 @@ class _OverviewState extends State<Overview> {
     final machine = widget.machine;
     final snapshot = machine.snapshot;
     final cpu = object(snapshot['cpu']), ram = object(snapshot['ram']);
+    final reach = object(snapshot['network']);
     final theme = Theme.of(context);
     final valid = machine.history.where((row) => instant(row['ts']) != null).toList()
       ..sort((a, b) => instant(a['ts'])!.compareTo(instant(b['ts'])!));
@@ -157,7 +174,25 @@ class _OverviewState extends State<Overview> {
         : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 7, child: resources), const SizedBox(width: 18), Expanded(flex: 4, child: facts)])),
       const SizedBox(height: 18),
       MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const SectionHeader(title: 'Network', subtitle: 'Transfer rates and interface state'),
+        SectionHeader(
+          title: 'Network',
+          subtitle: 'Reachability, transfer rates and interface state',
+          action: reach.isEmpty ? null : StatusPill(label: networkStateLabel(reach['state']), tone: networkStateTone(reach['state']), icon: networkStateIcon(reach['state'])),
+        ),
+        const SizedBox(height: 16),
+        if (reach.isEmpty)
+          const Text('Reachability monitoring has not reported yet. The agent probes the configured target about once a minute while net_watch is enabled.')
+        else
+          DataTree(value: {
+            'target': reach['target'],
+            'last_checked': timestamp(reach['checked_at']),
+            'state_since': timestamp(reach['since']),
+            if (reach['state'] == 'down') 'outage_started': timestamp(reach['down_since']),
+            if (reach['state'] == 'up' && (reach['seconds_down'] is num) && (reach['seconds_down'] as num) > 0) 'last_outage_seconds': reach['seconds_down'],
+          }),
+        const SizedBox(height: 14),
+        const Divider(height: 1),
+        NetworkWatchControl(machine: machine),
         const SizedBox(height: 18),
         Wrap(spacing: 38, runSpacing: 16, children: [
           _networkValue(context, 'Receive', snapshot['down_bps'], Icons.south_outlined),
@@ -247,6 +282,121 @@ String _uptime(dynamic value) {
   return '${duration.inDays}d ${duration.inHours.remainder(24)}h ${duration.inMinutes.remainder(60)}m';
 }
 String _seriesLabel(String key) => switch (key) {'cpu' => 'CPU', 'ram' => 'Memory', 'up_bps' => 'Send', 'down_bps' => 'Receive', _ => label(key)};
+
+/// Returns a copy of a monitor configuration with only `net_watch` changed.
+///
+/// The reachability switch deliberately edits a single key against the current
+/// revision so a stale full copy cannot overwrite unrelated agent settings. The
+/// input map is never mutated.
+Map<String, dynamic> withNetworkWatch(Map<String, dynamic> value, bool enabled) =>
+    Map<String, dynamic>.from(value)..['net_watch'] = enabled;
+
+/// One-click control for the agent's own reachability probe (`net_watch`).
+///
+/// The generic Agent configuration editor still exposes the same key with full
+/// context; this switch mirrors it beside the reachability state so the target
+/// and its up/down history can be toggled where they are actually read. It
+/// edits only `net_watch` and preserves every other monitor setting and the
+/// authoritative revision, so it can never clobber concurrent edits.
+class NetworkWatchControl extends StatefulWidget {
+  final MachineState machine;
+  const NetworkWatchControl({super.key, required this.machine});
+  @override
+  State<NetworkWatchControl> createState() => _NetworkWatchControlState();
+}
+
+class _NetworkWatchControlState extends State<NetworkWatchControl> {
+  bool? enabled;
+  String? target;
+  int? revision;
+  Map<String, dynamic>? value;
+  String? error;
+  bool loading = false;
+
+  @override
+  void initState() { super.initState(); unawaited(load()); }
+
+  @override
+  void didUpdateWidget(NetworkWatchControl old) {
+    super.didUpdateWidget(old);
+    if (old.machine != widget.machine) {
+      enabled = null; target = null; revision = null; value = null; error = null;
+      unawaited(load());
+    }
+  }
+
+  void apply(Map<String, dynamic> result) {
+    final raw = result['value'];
+    if (raw is! Map) throw StateError('Agent returned no monitor configuration.');
+    final settings = Map<String, dynamic>.from(raw);
+    value = settings;
+    revision = (result['revision'] as num?)?.toInt();
+    enabled = settings['net_watch'] == true;
+    target = settings['ping_target']?.toString();
+  }
+
+  Future<void> load() async {
+    if (loading) return;
+    final machine = widget.machine;
+    setState(() { loading = true; error = null; });
+    try {
+      final result = await machine.api.call('GET', '/config/monitor');
+      if (mounted && widget.machine == machine) setState(() => apply(result));
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> set(bool next) async {
+    final current = value;
+    final expected = revision;
+    if (current == null || expected == null) return;
+    final machine = widget.machine;
+    final approved = await confirm(context,
+        title: next ? 'Enable network reachability monitoring?' : 'Disable network reachability monitoring?',
+        message: 'Machine: ${machine.profile.name}\nTarget: ${target ?? '1.1.1.1'}\n\n'
+            'While enabled the agent probes the target about once a minute and records durable up/down events. '
+            'Disabling stops new reachability alerts; retained measurements and history are kept.',
+        danger: !next);
+    if (!approved) return;
+    setState(() { loading = true; error = null; });
+    try {
+      // Send only net_watch: a stale full copy would overwrite unrelated settings.
+      final edited = withNetworkWatch(current, next);
+      final args = {'domain': 'monitor', 'revision': expected, 'value': edited};
+      final challenge = await machine.api.call('POST', '/confirmations', body: {'operation': 'configuration.update', 'args': args});
+      final updated = await machine.api.call('PUT', '/config/monitor', body: {'revision': expected, 'value': edited, 'nonce': challenge['nonce']});
+      if (mounted && widget.machine == machine) setState(() => apply(updated));
+    } catch (e) {
+      if (mounted) setState(() => error = '$e');
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        secondary: Icon(enabled == true ? Icons.wifi_tethering : Icons.wifi_tethering_off_outlined, color: theme.colorScheme.primary),
+        title: const Text('Network reachability monitoring'),
+        subtitle: Text(enabled == true
+            ? 'Probing ${target ?? '1.1.1.1'} about once a minute; up/down transitions become durable events and alerts.'
+            : value == null
+                ? 'Reading the agent reachability setting…'
+                : 'Disabled. Enable to probe ${target ?? '1.1.1.1'} about once a minute and record durable up/down events.'),
+        value: enabled ?? false,
+        onChanged: loading || value == null ? null : (next) => set(next),
+      ),
+      if (loading) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator()),
+      if (error != null) Padding(padding: const EdgeInsets.only(top: 8), child: SelectableText('Reachability setting unavailable: $error', style: TextStyle(color: theme.colorScheme.error))),
+    ]);
+  }
+}
 
 class MetricChart extends StatelessWidget {
   final List<Map<String, dynamic>> history;

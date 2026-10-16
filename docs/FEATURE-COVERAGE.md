@@ -1,6 +1,8 @@
 # Native desktop feature coverage
 
-Baseline: `72fae430d3ee8d29b5d004ce476cacdff4bac821`. All 87 documented legacy commands are accounted for below. The agent currently exposes 199 executable operation descriptors, including typed settings and recovery operations.
+Baseline: `72fae430d3ee8d29b5d004ce476cacdff4bac821`. All 87 documented legacy commands are accounted for below. The agent currently exposes 200 executable operation descriptors, including typed settings and recovery operations.
+
+`monitoring.network_health` (`/net`) extends the legacy mapping with an agent-owned reachability watch: the worker probes `ping_target` over TCP while `net_watch` is enabled and records durable `network.down`/`network.up` events that the client and push providers surface. Legacy `/net` remains `monitoring.network` for transfer rates; the health operation reports the up/down state.
 
 This is a source-to-catalog migration ledger, not a claim that every destructive operation was executed. Actual verification and required production VM/device checks are documented in `DESKTOP-DEPLOYMENT.md`. Transport-only commands are intentionally replaced rather than kept as aliases.
 

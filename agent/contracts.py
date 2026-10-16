@@ -11,6 +11,23 @@ API_VERSION = 1
 CAPABILITIES = frozenset({"view", "operate", "security", "accounts", "execute", "files", "backup", "configure", "manage"})
 TERMINAL_STATES = frozenset({"succeeded", "partial", "failed", "cancelled", "interrupted"})
 
+# One definition of what a sensitive *name* looks like, shared by the job
+# transport, durable events/audit records and the configuration surfaces so the
+# three can never drift apart.
+SECRET_NAME_WORDS = frozenset({"password", "passwd", "secret", "token", "credential",
+                               "private_key", "api_key", "api_hash", "authorization",
+                               "passphrase"})
+# Durable events and audit records additionally treat generic envelope fields as
+# secret-shaped. Job results keep those keys because they carry user-visible codes.
+SECRET_ENVELOPE_WORDS = SECRET_NAME_WORDS | frozenset({"csr", "nonce", "code"})
+
+
+def secret_named(name: object, words: frozenset[str] = SECRET_NAME_WORDS) -> bool:
+    """True when a field name looks like it holds credential material."""
+    text = str(name).lower()
+    return any(word in text for word in words)
+
+
 
 class OperationError(Exception):
     """An expected, safe-to-display operation admission or execution error."""

@@ -4301,13 +4301,13 @@ def check_update_available():
         return
     try:
         r = requests.get(url, timeout=60)
-        new_hash = hashlib.md5(r.content).hexdigest()
+        new_hash = hashlib.sha256(r.content).hexdigest()
     except Exception as e:
         print(f"[update-check] error: {e}")
         return
     try:
         with open(SCRIPT_PATH, "rb") as f:
-            cur_hash = hashlib.md5(f.read()).hexdigest()
+            cur_hash = hashlib.sha256(f.read()).hexdigest()
     except Exception:
         return
     if new_hash != cur_hash:

@@ -39,11 +39,15 @@ const sectionMap = <String, List<String>>{
   'Settings': ['settings'], 'Maintenance & help': ['maintenance'], 'Activity': ['activity'],
 };
 
+// Grouped in working order: pick a machine, watch it, protect it, change it,
+// then manage the agent itself. Diagnostics sits with observation because it
+// answers "what is happening"; imaging sits with management because it changes
+// the operating system rather than recovering data.
 const navigationGroups = <String, List<String>>{
   'Fleet': ['Machines'],
-  'Observe': ['Overview', 'Monitoring', 'Activity'],
-  'Protect & recover': ['Security', 'Backups & recovery', 'Imaging'],
-  'Manage': ['Accounts', 'Processes & services', 'Files', 'Diagnostics', 'Automation'],
+  'Observe': ['Overview', 'Monitoring', 'Diagnostics', 'Activity'],
+  'Protect & recover': ['Security', 'Backups & recovery'],
+  'Manage': ['Accounts', 'Processes & services', 'Files', 'Automation', 'Imaging'],
   'Workspace': ['Settings', 'Devices & access', 'Maintenance & help'],
 };
 
@@ -202,6 +206,7 @@ class _WorkspaceState extends State<Workspace> {
   }
   Widget machineBar(MachineState machine) {
     final colors = Theme.of(context).colorScheme;
+    final reach = object(machine.snapshot['network']);
     return Container(
       width: double.infinity, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       decoration: BoxDecoration(color: colors.surfaceContainerLowest, border: Border(bottom: BorderSide(color: colors.outlineVariant))),
@@ -209,6 +214,7 @@ class _WorkspaceState extends State<Workspace> {
         Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text(machine.profile.name, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
           statusChip(machine.freshness),
+          if (reach.isNotEmpty) StatusPill(label: networkStateLabel(reach['state']), tone: networkStateTone(reach['state']), icon: networkStateIcon(reach['state'])),
           StatusPill(label: '${machine.profile.role} access', icon: Icons.key_outlined),
           if (machine.health['read_only'] == true) const StatusPill(label: 'Read-only safety mode', tone: MonitorTone.warning, icon: Icons.lock_outlined),
           if (machine.busy) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),

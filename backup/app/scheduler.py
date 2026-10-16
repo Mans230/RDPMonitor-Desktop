@@ -16,6 +16,7 @@ import time
 import socket
 import threading
 import datetime
+import hashlib
 import subprocess
 
 from logger_utils import log, read_recent_logs
@@ -135,11 +136,19 @@ def run_hook(cfg, which, status="", cancel_event=None):
     cmd = (cfg["backup"].get(f"{which}_command") or "").strip()
     if not cmd:
         return True
+    if not cfg["backup"].get("hooks_enabled", True):
+        log("Backup %s-hook skipped: pre/post commands are disabled (hooks_enabled=false)" % which, "ERROR")
+        return True
+    if "\x00" in cmd:
+        log("Backup %s-hook rejected: command contains a NUL character" % which, "ERROR")
+        return False
     timeout = max(1, int(cfg["backup"].get("hook_timeout_minutes", 60))) * 60
     env = os.environ.copy()
     env["BACKUP_STATUS"] = status
     env["BACKUP_TOOL_ROOT"] = backup_engine.TOOL_ROOT
-    log("Backup %s-hook started under the worker identity" % which)
+    # Auditable without leaking the command text, which may embed credentials.
+    fingerprint = hashlib.sha256(cmd.encode("utf-8", "replace")).hexdigest()[:16]
+    log("Backup %s-hook started under the worker identity (sha256 %s)" % (which, fingerprint))
     try:
         launch = ({"creationflags": _NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
                   if os.name == "nt" else {"start_new_session": True})
