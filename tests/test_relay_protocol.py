@@ -4,7 +4,8 @@ import unittest
 
 from relay.protocol import (ProtocolError, create_pairing_envelope, decode_secret,
                             decrypt_pairing, encode_secret, make_invitation,
-                            normalize_origin, parse_invitation)
+                            make_setup_invitation, normalize_origin, parse_invitation,
+                            parse_setup_invitation)
 
 
 class RelayInvitationTests(unittest.TestCase):
@@ -97,6 +98,61 @@ class RelayInvitationTests(unittest.TestCase):
         for token in ("A" * 42 + "B", "A" * 43 + "=", "A" * 42, "A" * 44):
             with self.subTest(token=token), self.assertRaises(ProtocolError):
                 decode_secret(token)
+
+    def test_setup_keeps_independent_capabilities_in_fragment_and_uses_pairing_key_only(self):
+        install_token = encode_secret(bytes(range(32, 64)))
+        code = make_setup_invitation(self.origin, install_token, self.secret)
+        public, fragment = code.split("#")
+        self.assertNotIn(install_token, public)
+        self.assertNotIn(encode_secret(self.secret), public)
+        self.assertEqual(fragment, install_token + "." + encode_secret(self.secret))
+        setup = parse_setup_invitation(code)
+        self.assertEqual(parse_invitation(setup.installation_code, kind="install").token, install_token)
+        self.assertEqual(parse_invitation(setup.connection_code, kind="pair").secret, self.secret)
+        envelope = create_pairing_envelope(setup.origin, self.payload(), secret=setup.pairing_secret, now=self.now)
+        self.assertEqual(envelope["code"], setup.connection_code)
+        self.assertEqual(decrypt_pairing(setup.origin, setup.pairing_secret, envelope["ciphertext"], now=self.now), self.payload())
+        with self.assertRaises(ProtocolError):
+            decrypt_pairing(setup.origin, setup.install_secret, envelope["ciphertext"], now=self.now)
+        self.assertNotIn(install_token, repr(setup))
+        self.assertNotIn(encode_secret(self.secret), repr(setup))
+        self.assertNotIn(repr(self.secret), repr(setup))
+
+    def test_setup_rejects_shared_keys_wrong_kinds_query_secrets_and_ambiguous_components(self):
+        token = encode_secret(self.secret)
+        install_token = encode_secret(bytes(range(32, 64)))
+        code = make_setup_invitation(self.origin, install_token, self.secret)
+        with self.assertRaises(ProtocolError):
+            make_setup_invitation(self.origin, token, self.secret)
+        malformed = (
+            code.replace(install_token, token), code + ".", code + "=",
+            code.replace("." + token, ""), code.replace("v=1", "v=2"),
+            code.replace("v=1", "v=1&v=1"), code.replace("v=1", "v=1&key=" + token),
+            code.replace("setup?", "install?"), code.replace("setup?", "setup/path?"),
+            code.replace("#", "%23"), code.replace("setup?", "setup?\n"),
+            code.replace(install_token, "A" * 42 + "B"),
+            code.replace(token, "%41" + token[1:]),
+        )
+        for invalid in malformed:
+            with self.subTest(invalid=invalid), self.assertRaises(ProtocolError) as error:
+                parse_setup_invitation(invalid)
+            self.assertNotIn(token, str(error.exception))
+            self.assertNotIn(install_token, str(error.exception))
+        for kind in ("install", "pair"):
+            with self.assertRaises(ProtocolError):
+                parse_invitation(code, kind=kind)
+
+    def test_setup_preserves_certificate_validated_origin_and_explicit_loopback_exception(self):
+        install_token = encode_secret(bytes(range(32, 64)))
+        code = make_setup_invitation("https://RELAY.example:443/", install_token, self.secret)
+        self.assertEqual(parse_setup_invitation(code).origin, self.origin)
+        with self.assertRaises(ProtocolError):
+            make_setup_invitation("http://remote.example", install_token, self.secret, allow_loopback=True)
+        loopback = make_setup_invitation("http://127.0.0.1:8765", install_token, self.secret, allow_loopback=True)
+        with self.assertRaises(ProtocolError):
+            parse_setup_invitation(loopback)
+        setup = parse_setup_invitation(loopback, allow_loopback=True)
+        self.assertEqual(parse_invitation(setup.installation_code, kind="install", allow_loopback=True).token, install_token)
 
 
 if __name__ == "__main__":

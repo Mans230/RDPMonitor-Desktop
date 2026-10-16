@@ -10,6 +10,8 @@ import 'transfers.dart';
 import 'desktop.dart';
 import 'design.dart';
 import 'relay_views.dart';
+import 'fleet_views.dart';
+import 'operation_layout.dart';
 
 void main() { WidgetsFlutterBinding.ensureInitialized(); runApp(const MonitorApp()); }
 class MonitorApp extends StatelessWidget {
@@ -24,19 +26,14 @@ class MonitorApp extends StatelessWidget {
 const destinations = <String, IconData>{
   'Machines': Icons.computer_outlined, 'Overview': Icons.dashboard_outlined,
   'Monitoring': Icons.monitor_heart_outlined, 'Security': Icons.shield_outlined,
-  'Accounts': Icons.people_outline, 'Processes & services': Icons.memory_outlined,
-  'Backups & recovery': Icons.backup_outlined, 'Files': Icons.folder_outlined,
+  'Accounts': Icons.people_outline, 'Processes': Icons.memory_outlined,
+  'Services': Icons.miscellaneous_services_outlined,
+  'Backups': Icons.backup_outlined, 'Recovery': Icons.restore_outlined,
+  'Files': Icons.folder_outlined,
   'Diagnostics': Icons.troubleshoot, 'Imaging': Icons.disc_full_outlined,
   'Automation': Icons.schedule_outlined, 'Activity': Icons.history,
   'Settings': Icons.settings_outlined, 'Devices & access': Icons.key_outlined,
   'Maintenance & help': Icons.help_outline,
-};
-const sectionMap = <String, List<String>>{
-  'Overview': ['overview'], 'Monitoring': ['monitoring'], 'Security': ['security'],
-  'Accounts': ['accounts'], 'Processes & services': ['processes', 'services'],
-  'Backups & recovery': ['backups', 'backup', 'recovery'], 'Files': ['files'],
-  'Diagnostics': ['diagnostics'], 'Imaging': ['imaging'], 'Automation': ['automation'],
-  'Settings': ['settings'], 'Maintenance & help': ['maintenance'], 'Activity': ['activity'],
 };
 
 // Grouped in working order: pick a machine, watch it, protect it, change it,
@@ -46,8 +43,8 @@ const sectionMap = <String, List<String>>{
 const navigationGroups = <String, List<String>>{
   'Fleet': ['Machines'],
   'Observe': ['Overview', 'Monitoring', 'Diagnostics', 'Activity'],
-  'Protect & recover': ['Security', 'Backups & recovery'],
-  'Manage': ['Accounts', 'Processes & services', 'Files', 'Automation', 'Imaging'],
+  'Protect & recover': ['Security', 'Backups', 'Recovery'],
+  'Manage': ['Accounts', 'Processes', 'Services', 'Files', 'Automation', 'Imaging'],
   'Workspace': ['Settings', 'Devices & access', 'Maintenance & help'],
 };
 
@@ -60,8 +57,7 @@ class _WorkspaceState extends State<Workspace> {
   final Fleet fleet = Fleet();
   String page = 'Machines';
   String search = '';
-  String fleetSearch = '';
-  String fleetFilter = 'All';
+  bool sidebarVisible = true;
   String? error;
   @override
   void initState() { super.initState(); fleet.addListener(changed); unawaited(fleet.initialize()); }
@@ -73,14 +69,13 @@ class _WorkspaceState extends State<Workspace> {
     catch (e) { if (mounted) setState(() => error = e.toString()); return null; }
   }
   void message(String text) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text))); }
-  Future<void> enroll() => showConnectCodeDialog(context, onEnrolled: fleet.add);
+  Future<void> enroll() => showAddMachineDialog(context, onEnrolled: fleet.add);
   Future<void> enrollDirect() async {
     await showDialog<void>(context: context, barrierDismissible: false, builder: (_) => EnrollmentDialog(onEnrolled: fleet.add));
   }
   Future<void> connectionAction(String action) async {
     switch (action) {
-      case 'connect': await enroll();
-      case 'prepare': if (mounted) await showPrepareInstallationDialog(context);
+      case 'connect': await showConnectCodeDialog(context, onEnrolled: fleet.add);
       case 'relay': if (mounted) await showRelaySettingsDialog(context);
       case 'direct': await enrollDirect();
     }
@@ -118,24 +113,36 @@ class _WorkspaceState extends State<Workspace> {
   }
   @override
   Widget build(BuildContext context) {
-    final wide = MediaQuery.sizeOf(context).width >= 1120;
+    final windowWidth = MediaQuery.sizeOf(context).width;
+    final wide = windowWidth >= 1120;
+    final showSidebar = wide && sidebarVisible;
+    final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    final inlineAdd = windowWidth >= 600 * textScale.clamp(1, 2);
     final current = fleet.current;
     final body = !fleet.ready ? const Center(child: CircularProgressIndicator()) : content(current);
     return Scaffold(
       appBar: AppBar(
+        leading: wide ? IconButton(
+          onPressed: () => setState(() => sidebarVisible = !sidebarVisible),
+          tooltip: sidebarVisible ? 'Hide sidebar' : 'Show sidebar',
+          icon: Icon(sidebarVisible ? Icons.menu_open_outlined : Icons.menu_outlined),
+        ) : null,
         title: Row(children: [
-          if (!wide) ...[const MonitorMark(size: 28), const SizedBox(width: 10)],
+          if (!showSidebar && windowWidth >= 600) ...[const MonitorMark(size: 28), const SizedBox(width: 10)],
           Flexible(child: Text(page, overflow: TextOverflow.ellipsis)),
         ]),
         actions: [
+          if (inlineAdd) Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilledButton.icon(onPressed: fleet.ready && fleet.startupError == null ? enroll : null, icon: const Icon(Icons.add), label: const Text('Add machine')),
+          ),
           if (current != null) IconButton(onPressed: () => attempt(() => fleet.refresh(full: true)), tooltip: 'Refresh agent data', icon: const Icon(Icons.refresh_outlined)),
           if (Platform.isWindows) const DesktopMenu(),
           PopupMenuButton<String>(
-            tooltip: 'Connect and install machines', icon: const Icon(Icons.add_link_outlined),
+            tooltip: 'Advanced connection options', icon: const Icon(Icons.more_vert),
             onSelected: (action) => unawaited(connectionAction(action)),
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'connect', child: Text('Connect with code')),
-              PopupMenuItem(value: 'prepare', child: Text('Prepare agent installation')),
               PopupMenuItem(value: 'relay', child: Text('Relay settings')),
               PopupMenuDivider(),
               PopupMenuItem(value: 'direct', child: Text('Advanced: direct HTTPS')),
@@ -146,12 +153,17 @@ class _WorkspaceState extends State<Workspace> {
       ),
       drawer: wide ? null : Drawer(child: SafeArea(child: navigation(false))),
       body: Row(children: [
-        if (wide) SizedBox(width: 258, child: navigation(true)),
-        if (wide) const VerticalDivider(width: 1),
+        if (showSidebar) SizedBox(width: 258, child: navigation(true)),
+        if (showSidebar) const VerticalDivider(width: 1),
         Expanded(child: Column(children: [
+          if (!inlineAdd) Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Align(alignment: Alignment.centerLeft, child: FilledButton.icon(
+              onPressed: fleet.ready && fleet.startupError == null ? enroll : null, icon: const Icon(Icons.add), label: const Text('Add machine'),
+            )),
+          ),
           if (fleet.startupError != null) errorBanner(fleet.startupError!),
           if (error != null) errorBanner(error!, onClose: () => setState(() => error = null)),
-          if (current != null) machineBar(current),
           Expanded(child: body),
         ])),
       ]),
@@ -170,7 +182,7 @@ class _WorkspaceState extends State<Workspace> {
   }
   Widget navigation(bool wide) {
     final colors = Theme.of(context).colorScheme;
-    return Material(color: colors.surfaceContainerLow, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return Material(color: colors.surfaceContainerLow, child: ListView(padding: const EdgeInsets.only(bottom: 16), children: [
       Padding(padding: const EdgeInsets.fromLTRB(20, 24, 20, 22), child: Row(children: [
         const MonitorMark(size: 34), const SizedBox(width: 12),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -184,7 +196,7 @@ class _WorkspaceState extends State<Workspace> {
         items: fleet.machines.values.map((m) => DropdownMenuItem(value: m.profile.id, child: Text(m.profile.name, overflow: TextOverflow.ellipsis))).toList(),
         onChanged: (id) { if (id != null) fleet.select(id); },
       )),
-      Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(10, 0, 10, 16), children: [
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 10), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         for (final group in navigationGroups.entries) ...[
           Padding(padding: const EdgeInsets.fromLTRB(14, 15, 14, 7), child: Text(group.key, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: colors.onSurfaceVariant, fontWeight: FontWeight.w600))),
           for (final name in group.value) Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: ListTile(
@@ -213,10 +225,10 @@ class _WorkspaceState extends State<Workspace> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text(machine.profile.name, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-          statusChip(machine.freshness),
-          if (reach.isNotEmpty) StatusPill(label: networkStateLabel(reach['state']), tone: networkStateTone(reach['state']), icon: networkStateIcon(reach['state'])),
-          StatusPill(label: '${machine.profile.role} access', icon: Icons.key_outlined),
-          if (machine.health['read_only'] == true) const StatusPill(label: 'Read-only safety mode', tone: MonitorTone.warning, icon: Icons.lock_outlined),
+          operationBadge(machine.freshness, icon: machine.freshness == 'Live' ? Icons.sensors_outlined : Icons.history_outlined, tone: machine.freshness == 'Live' ? MonitorTone.success : MonitorTone.warning),
+          if (reach.isNotEmpty) operationBadge(networkStateLabel(reach['state']), icon: networkStateIcon(reach['state']), tone: networkStateTone(reach['state'])),
+          operationBadge('${machine.profile.role} access', icon: Icons.key_outlined),
+          if (machine.health['read_only'] == true) operationBadge('Read-only safety mode', icon: Icons.lock_outlined, warning: true),
           if (machine.busy) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
         ]),
         const SizedBox(height: 6),
@@ -229,7 +241,7 @@ class _WorkspaceState extends State<Workspace> {
     );
   }
   Widget content(MachineState? machine) {
-    if (page == 'Machines') return machines();
+    if (page == 'Machines') return MachineFleetView(fleet: fleet, onAdd: enroll, onOpen: openMachine);
     if (page == 'Settings' && machine == null) {
       return ListView(padding: const EdgeInsets.all(20), children: [
         relaySettingsLauncher(), const SizedBox(height: 16),
@@ -238,6 +250,8 @@ class _WorkspaceState extends State<Workspace> {
     }
     if (machine == null) return emptySetup();
     final children = <Widget>[
+      machineBar(machine),
+      const SizedBox(height: 20),
       if (machine.errors.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 16), child: Material(color: Theme.of(context).colorScheme.errorContainer, borderRadius: BorderRadius.circular(10), child: ExpansionTile(leading: const Icon(Icons.warning_amber_outlined), title: Text('${machine.errors.length} data source(s) unavailable'), subtitle: const Text('Retained data may be stale. Expand to inspect source errors.'), children: machine.errors.entries.map((e) => Padding(padding: const EdgeInsets.all(16), child: SelectableText('${e.key}: ${e.value}'))).toList()))),
       if (page == 'Overview' || page == 'Monitoring') Overview(machine: machine, expanded: page == 'Monitoring'),
       if (page == 'Activity') ActivityView(machine: machine, onJob: (job) => jobDetail(machine, job), onError: (e) => setState(() => error = e), onRefresh: () => fleet.refresh(full: true)),
@@ -248,208 +262,107 @@ class _WorkspaceState extends State<Workspace> {
       if (page == 'Files') UploadView(key: ValueKey(machine.profile.id), machine: machine, onJob: (job) { setState(() => page = 'Activity'); unawaited(fleet.refresh(full: true)); unawaited(jobDetail(machine, job)); }),
       if (page == 'Maintenance & help') help(machine),
     ];
-    if (sectionMap.containsKey(page)) children.add(operations(machine));
-    return Align(alignment: Alignment.topCenter, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1440), child: ListView(padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 600 ? 16 : 28), children: children)));
+    if (operationSections.containsValue(page)) children.add(operations(machine));
+    return LayoutBuilder(builder: (context, bounds) => Align(alignment: Alignment.topCenter,
+      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1440),
+        child: ListView(padding: EdgeInsets.all(bounds.maxWidth < 600 ? 16 : 28), children: children))));
   }
   Widget relaySettingsLauncher() => MonitorPanel(child: ListTile(
     contentPadding: EdgeInsets.zero, leading: const Icon(Icons.hub_outlined),
-    title: const Text('Relay and installation'),
-    subtitle: const Text('Configure your self-hosted relay, prepare VM invitations and manage routes.'),
+    title: const Text('Relay settings'),
+    subtitle: const Text('Configure your self-hosted relay and manage its connection routes.'),
     trailing: const Icon(Icons.chevron_right_outlined),
     onTap: () => showRelaySettingsDialog(context),
   ));
   Widget emptySetup() => Center(child: SingleChildScrollView(padding: const EdgeInsets.all(28), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     const MonitorMark(size: 48), const SizedBox(height: 22),
     Text('Your fleet starts here', style: Theme.of(context).textTheme.headlineLarge),
-    const SizedBox(height: 12), Text('Install on the VM. Connect with a code.', style: Theme.of(context).textTheme.titleLarge),
+    const SizedBox(height: 12), Text('One setup code. Automatic connection.', style: Theme.of(context).textTheme.titleLarge),
     const SizedBox(height: 12), const Text('Connect Windows VMs across networks without opening inbound management ports or configuring a VPN. Agent traffic remains end-to-end certificate-authenticated HTTPS inside the relay tunnel.'),
-    const SizedBox(height: 20), const Text('1. Deploy your self-hosted HTTPS relay and save its address and administration key in Relay settings once.\n\n2. Choose Prepare agent installation. Run the agent installer on your VM, approve administrator elevation and paste the installation invitation.\n\n3. Copy the private, expiring connection code from the VM setup window into Connect with code here. The agent continues running after this app or the RDP session closes.'),
+    const SizedBox(height: 20), const Text('Choose Add machine, give it a name and group, then open the installer link on your VM and paste its private setup code. This desktop connects automatically when VM setup completes. Configure your self-hosted relay once if prompted.'),
     const SizedBox(height: 16), const Text('This project does not supply a publicly hosted relay. Use the accurately labeled installer from GitHub Releases; unsigned previews are monitoring-only and are not production-signed installations. Invitations are single-use. Private client keys stay in OS-protected storage.'),
     const SizedBox(height: 22), Wrap(spacing: 12, runSpacing: 12, children: [
-      FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add_link), label: const Text('Connect with code')),
-      OutlinedButton.icon(onPressed: () => showPrepareInstallationDialog(context), icon: const Icon(Icons.install_desktop_outlined), label: const Text('Prepare agent installation')),
+      FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add), label: const Text('Add machine')),
       TextButton(onPressed: () => showRelaySettingsDialog(context), child: const Text('Relay settings')),
     ]),
-    const SizedBox(height: 12), TextButton(onPressed: enrollDirect, child: const Text('Advanced: connect directly over HTTPS')),
   ]))));
-  Widget machines() {
-    if (fleet.machines.isEmpty) return emptySetup();
-    final all = fleet.machines.values.toList();
-    final live = all.where((m) => m.freshness == 'Live').length;
-    final contacts = all.map((m) => m.lastContact).whereType<DateTime>().toList()..sort();
-    final query = fleetSearch.trim().toLowerCase();
-    final visible = all.where((m) =>
-      (fleetFilter == 'All' || m.freshness == fleetFilter) &&
-      '${m.profile.name} ${m.profile.group} ${m.profile.endpoint} ${m.profile.role}'.toLowerCase().contains(query)).toList();
-    final groups = <String, List<MachineState>>{};
-    for (final machine in visible) {
-      groups.putIfAbsent(machine.profile.group.isEmpty ? 'Ungrouped' : machine.profile.group, () => []).add(machine);
-    }
-    return LayoutBuilder(builder: (context, constraints) {
-      final table = constraints.maxWidth >= 950;
-      return Align(alignment: Alignment.topCenter, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1440), child: ListView(
-        padding: EdgeInsets.all(constraints.maxWidth < 600 ? 16 : 28),
-        children: [
-          SectionHeader(title: 'Machines', subtitle: 'Every action targets one enrolled machine. No destructive bulk operations.', action: FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add_link_outlined), label: const Text('Connect with code'))),
-          const SizedBox(height: 22),
-          MonitorPanel(child: Wrap(spacing: 40, runSpacing: 18, children: [
-            fleetMetric('Enrolled', '${all.length}'),
-            fleetMetric('Live telemetry', '$live'),
-            fleetMetric('Not live', '${all.length - live}'),
-            fleetMetric('Latest fleet contact', contacts.isEmpty ? 'Not reported' : timestamp(contacts.last.toIso8601String())),
-          ])),
-          const SizedBox(height: 22),
-          TextFormField(initialValue: fleetSearch,
-            decoration: const InputDecoration(labelText: 'Find a machine', hintText: 'Name, group, address or role', prefixIcon: Icon(Icons.search_outlined)),
-            onChanged: (value) => setState(() => fleetSearch = value),
-          ),
-          const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            for (final filter in ['All', 'Live', 'Stale', 'Offline', 'Connecting']) ChoiceChip(
-              label: Text('$filter · ${filter == 'All' ? all.length : all.where((m) => m.freshness == filter).length}'),
-              selected: fleetFilter == filter, onSelected: (_) => setState(() => fleetFilter = filter),
-            ),
-          ]),
-          const SizedBox(height: 8),
-          if (visible.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 36), child: Text('No machines match this search and connection filter. Change the search or select All.')),
-          for (final group in groups.entries) ...[
-            Padding(padding: const EdgeInsets.only(top: 24, bottom: 12), child: Row(children: [
-              Text(group.key, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(width: 10), Text('${group.value.length}', style: Theme.of(context).textTheme.bodySmall?.copyWith(fontFeatures: monitorFigures)),
-            ])),
-            MonitorPanel(padding: EdgeInsets.zero, child: table ? SizedBox(width: double.infinity, child: DataTable(
-              headingRowHeight: 42, dataRowMinHeight: 72, dataRowMaxHeight: 82,
-              horizontalMargin: 18, columnSpacing: 22, showCheckboxColumn: false,
-              columns: const [
-                DataColumn(label: Text('Machine / endpoint')), DataColumn(label: Text('Connection')),
-                DataColumn(label: Text('Role')), DataColumn(label: Text('Last contact')), DataColumn(label: Text('Profile')),
-              ],
-              rows: group.value.map((machine) => DataRow(
-                selected: fleet.selected == machine.profile.id,
-                onSelectChanged: (_) => openMachine(machine),
-                cells: [
-                  DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 310), child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(machine.profile.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 4), Text(_connectionLabel(machine.profile), maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
-                  ]))),
-                  DataCell(statusChip(machine.freshness)), DataCell(Text(machine.profile.role)),
-                  DataCell(Text(timestamp(machine.lastContact?.toIso8601String()), style: TextStyle(fontFeatures: monitorFigures))),
-                  DataCell(IconButton(onPressed: () => editProfile(machine), tooltip: 'Edit connection and grouping', icon: const Icon(Icons.edit_outlined))),
-                ],
-              )).toList(),
-            )) : Column(children: [
-              for (var i = 0; i < group.value.length; i++) ...[
-                if (i > 0) const Divider(height: 1),
-                machineRow(group.value[i]),
-              ],
-            ])),
-          ],
-        ],
-      )));
-    });
-  }
-  Widget fleetMetric(String label, String value) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(label, style: Theme.of(context).textTheme.bodySmall), const SizedBox(height: 6),
-    Text(value, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontFeatures: monitorFigures)),
-  ]);
   void openMachine(MachineState machine) {
     fleet.select(machine.profile.id);
     setState(() { page = 'Overview'; search = ''; });
   }
-  Widget machineRow(MachineState machine) => Material(type: MaterialType.transparency, child: InkWell(
-    onTap: () => openMachine(machine),
-    child: Padding(padding: const EdgeInsets.all(18), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Padding(padding: EdgeInsets.only(top: 2), child: Icon(Icons.computer_outlined, size: 22)),
-      const SizedBox(width: 12),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(machine.profile.name, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 6), Text(_connectionLabel(machine.profile), style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 9),
-        Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          statusChip(machine.freshness), Text('${machine.profile.role} access', style: Theme.of(context).textTheme.bodySmall),
-        ]),
-        const SizedBox(height: 8),
-        Text('Last contact: ${timestamp(machine.lastContact?.toIso8601String())}', style: Theme.of(context).textTheme.bodySmall?.copyWith(fontFeatures: monitorFigures)),
-      ])),
-      IconButton(onPressed: () => editProfile(machine), tooltip: 'Edit connection and grouping', icon: const Icon(Icons.more_horiz_outlined)),
-    ])),
-  ));
-  Future<void> editProfile(MachineState machine) async {
-    final name = TextEditingController(text: machine.profile.name), group = TextEditingController(text: machine.profile.group), endpoint = TextEditingController(text: machine.profile.endpoint);
-    await showDialog<void>(context: context, builder: (dialog) => AlertDialog(title: const Text('Machine profile'), content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      TextField(controller: name, decoration: const InputDecoration(labelText: 'Display name')), const SizedBox(height: 14),
-      TextField(controller: group, decoration: const InputDecoration(labelText: 'Group')), const SizedBox(height: 14),
-      TextField(controller: endpoint, readOnly: machine.profile.relay != null, decoration: InputDecoration(labelText: machine.profile.relay == null ? 'HTTPS origin' : 'Agent TLS identity (read-only)')), const SizedBox(height: 10),
-      Text(machine.profile.relay == null
-        ? 'Moving addresses does not change the enrolled identity. The new hostname must be covered by the agent certificate. Removing a local profile does not revoke the remote device certificate.'
-        : 'Relay: ${machine.profile.relay!.origin}\nTo change this machine’s relay, obtain a new connection code locally. Removing this profile does not revoke the remote device certificate or relay route.'),
-    ]))), actions: [
-      TextButton(onPressed: () async { final ok = await confirm(dialog, title: 'Remove local profile?', message: 'Secure credentials for ${machine.profile.name} will be erased from this app. Revoke the device on the agent first if it must no longer have access.', danger: true); if (ok) { final done = await attempt(() async { await fleet.remove(machine.profile.id); return true; }); if (done == true && dialog.mounted) Navigator.pop(dialog); } }, child: const Text('Remove')),
-      TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
-      FilledButton(onPressed: () async {
-        final done = await attempt(() async { serverUri(endpoint.text); if (name.text.trim().isEmpty) throw ApiException('A display name is required.');
-          final oldName = machine.profile.name, oldGroup = machine.profile.group, oldEndpoint = machine.profile.endpoint;
-          machine.profile.name = name.text.trim(); machine.profile.group = group.text.trim(); machine.profile.endpoint = endpoint.text.trim();
-          try { await fleet.save(); } catch (_) { machine.profile.name = oldName; machine.profile.group = oldGroup; machine.profile.endpoint = oldEndpoint; rethrow; }
-          machine.reconnect(); return true;
-        }); if (done == true && dialog.mounted) Navigator.pop(dialog);
-      }, child: const Text('Save')),
-    ]));
-    name.dispose(); group.dispose(); endpoint.dispose();
-  }
   Widget operations(MachineState machine) {
-    final sections = sectionMap[page]!;
-    final matching = machine.catalog.where((op) => op['hidden'] != true && op['id'] != 'files.upload').where((op) => sections.contains(op['section']) || (page == 'Maintenance & help' && !sectionMap.values.expand((s) => s).contains(op['section']) && op['section'] != 'activity')).toList();
+    final matching = machine.catalog.where((op) => op['hidden'] != true && operationDestination(op) == page).toList();
     final list = matching.where((op) => '${op['title']} ${op['description']} ${op['id']} ${op['capability']}'.toLowerCase().contains(search.toLowerCase())).toList();
     final groups = <String, List<Map<String, dynamic>>>{};
     for (final operation in list) {
-      final section = operation['section']?.toString() ?? 'Other';
-      groups.putIfAbsent(section, () => []).add(operation);
+      final subcategory = operationSubcategory(operation);
+      groups.putIfAbsent(subcategory, () => []).add(operation);
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const SizedBox(height: 24),
-      SectionHeader(title: 'Agent operations', subtitle: '${matching.length} catalog actions in ${page.toLowerCase()}. Permissions are enforced by the agent.'),
+      SectionHeader(title: '$page commands', subtitle: '${matching.length} catalog actions. Permissions and confirmations are enforced by the agent.'),
       const SizedBox(height: 16),
       TextField(key: ValueKey('operations-$page'), decoration: const InputDecoration(labelText: 'Find an operation', hintText: 'Search action, description or capability', prefixIcon: Icon(Icons.search_outlined)), onChanged: (value) => setState(() => search = value)),
       const SizedBox(height: 16),
       if (machine.catalog.isEmpty) const MonitorPanel(child: Text('Operation catalog is unavailable. Reconnect to retrieve the agent capabilities.')),
       if (machine.catalog.isNotEmpty && list.isEmpty) const MonitorPanel(child: Text('No matching operations in this section. The agent catalog is authoritative.')),
       for (final group in groups.entries) ...[
-        Padding(padding: const EdgeInsets.only(top: 12, bottom: 10), child: Text('${group.key.replaceAll('_', ' ')} · ${group.value.length}', style: Theme.of(context).textTheme.labelLarge)),
-        MonitorPanel(padding: EdgeInsets.zero, child: Column(children: [
-          for (var i = 0; i < group.value.length; i++) ...[
-            if (i > 0) const Divider(height: 1),
-            operationRow(machine, group.value[i]),
-          ],
-        ])),
+        Padding(padding: const EdgeInsets.only(top: 16, bottom: 12), child: SectionHeader(title: group.key, subtitle: '${group.value.length} related commands')),
+        OperationCardGrid(children: [
+          for (final operation in group.value) operationCard(machine, operation),
+        ]),
       ],
     ]);
   }
-  Widget operationRow(MachineState machine, Map<String, dynamic> operation) {
+  Widget operationCard(MachineState machine, Map<String, dynamic> operation) {
     final colors = Theme.of(context).colorScheme;
     final danger = operation['destructive'] == true;
     final readOnly = machine.health['read_only'] == true && operation['capability'] != 'view';
     final unavailable = operation['allowed'] == false || readOnly;
-    return Material(type: MaterialType.transparency, child: InkWell(
+    final title = operation['title']?.toString() ?? operation['id'].toString();
+    final description = operation['description']?.toString().trim() ?? '';
+    return MonitorPanel(padding: EdgeInsets.zero, child: InkWell(
+      borderRadius: monitorRadius,
+      hoverColor: colors.primary.withValues(alpha: .06),
+      focusColor: colors.primary.withValues(alpha: .14),
       onTap: () => operate(operation),
-      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(padding: const EdgeInsets.only(top: 2), child: Icon(danger ? Icons.warning_amber_outlined : Icons.play_circle_outline, size: 22, color: danger ? colors.error : colors.onSurfaceVariant)),
-        const SizedBox(width: 14),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(operation['title']?.toString() ?? operation['id'].toString(), style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 5),
-          Text(operation['description']?.toString() ?? '', style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 10),
-          Wrap(spacing: 8, runSpacing: 6, children: [
-            StatusPill(label: '${operation['capability']} capability', icon: Icons.key_outlined),
-            if (danger) const StatusPill(label: 'Explicit confirmation', tone: MonitorTone.danger, icon: Icons.warning_amber_outlined),
-            if (unavailable) StatusPill(label: readOnly ? 'Read-only mode' : 'Permission required', tone: MonitorTone.warning, icon: Icons.lock_outlined),
-          ]),
-          if (machine.freshness == 'Offline' || machine.freshness == 'Connecting') Padding(padding: const EdgeInsets.only(top: 8), child: Text('Submission requires an agent connection. Retained capabilities may be out of date.', style: TextStyle(color: colors.onSurfaceVariant, fontSize: 12))),
-        ])),
-        const SizedBox(width: 10), Icon(Icons.chevron_right_outlined, size: 20, color: colors.onSurfaceVariant),
+      child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(danger ? Icons.warning_amber_outlined : Icons.play_circle_outline, size: 22, color: danger ? colors.error : colors.primary),
+          const SizedBox(width: 12),
+          Expanded(child: Text(title, style: Theme.of(context).textTheme.titleMedium)),
+          const SizedBox(width: 8), Icon(Icons.chevron_right_outlined, size: 20, color: colors.onSurfaceVariant),
+        ]),
+        if (description.isNotEmpty && description != title) ...[
+          const SizedBox(height: 12),
+          Text(description, style: Theme.of(context).textTheme.bodySmall),
+        ],
+        const SizedBox(height: 14),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          operationBadge('${operation['capability']} capability', icon: Icons.key_outlined),
+          if (danger) operationBadge('Explicit confirmation', icon: Icons.warning_amber_outlined, danger: true),
+          if (unavailable) operationBadge(readOnly ? 'Read-only mode' : 'Permission required', icon: Icons.lock_outlined, warning: true),
+        ]),
+        if (machine.freshness == 'Offline' || machine.freshness == 'Connecting') Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Text('Submission requires an agent connection. Retained capabilities may be out of date.', style: Theme.of(context).textTheme.bodySmall),
+        ),
       ])),
     ));
+  }
+  Widget operationBadge(String text, {required IconData icon, bool danger = false, bool warning = false, MonitorTone tone = MonitorTone.neutral}) {
+    final colors = Theme.of(context).colorScheme;
+    final foreground = danger || tone == MonitorTone.danger ? colors.error
+      : warning || tone == MonitorTone.warning ? colors.onSecondaryContainer
+      : tone == MonitorTone.success ? colors.primary : colors.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(color: foreground.withValues(alpha: .08), borderRadius: BorderRadius.circular(6)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 14, color: foreground), const SizedBox(width: 5),
+        Flexible(child: Text(text, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: foreground, fontWeight: FontWeight.w600))),
+      ]),
+    );
   }
   Widget help(MachineState machine) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text('Agent maintenance', style: Theme.of(context).textTheme.headlineMedium), const SizedBox(height: 12),
@@ -464,12 +377,6 @@ Future<bool> confirm(BuildContext context, {required String title, required Stri
   icon: Icon(danger ? Icons.warning_amber : Icons.info_outline), title: Text(title), content: SizedBox(width: 520, child: SingleChildScrollView(child: Text(message))),
   actions: [TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Cancel')), FilledButton(onPressed: () => Navigator.pop(dialog, true), style: danger ? FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error) : null, child: const Text('Confirm'))],
 )) ?? false;
-
-Widget statusChip(String status) => StatusPill(
-  label: status,
-  tone: status == 'Live' ? MonitorTone.success : status == 'Stale' || status == 'Offline' ? MonitorTone.warning : MonitorTone.neutral,
-  icon: status == 'Live' ? Icons.sensors_outlined : status == 'Stale' ? Icons.history_outlined : status == 'Connecting' ? Icons.sync_outlined : Icons.cloud_off_outlined,
-);
 
 class EnrollmentDialog extends StatefulWidget {
   final Future<void> Function(MachineProfile) onEnrolled;

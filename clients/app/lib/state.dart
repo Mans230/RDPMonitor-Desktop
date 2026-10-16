@@ -130,15 +130,22 @@ class Fleet extends ChangeNotifier with WidgetsBindingObserver {
     finally { machine.busy = false; notifyListeners(); }
   }
   void select(String id) { selected = id; notifyListeners(); unawaited(refresh(full: true)); }
+  void _requireWritable() {
+    if (!ready || startupError != null) {
+      throw ApiException('Secure profiles are unavailable. Restore secure storage and reopen the app before changing the fleet.');
+    }
+  }
   Future<void> add(MachineProfile profile) async {
+    _requireWritable();
     if (machines.containsKey(profile.id)) throw ApiException('This agent is already enrolled. Remove its local profile before enrolling a replacement device certificate.');
     final profiles = [...machines.values.map((m) => m.profile), profile];
     await vault.save(profiles);
     machines[profile.id] = MachineState(profile); selected = profile.id;
     notifyListeners(); await refresh(full: true);
   }
-  Future<void> save() async { await vault.save(machines.values.map((m) => m.profile).toList()); notifyListeners(); }
+  Future<void> save() async { _requireWritable(); await vault.save(machines.values.map((m) => m.profile).toList()); notifyListeners(); }
   Future<void> renew(MachineState machine) async {
+    _requireWritable();
     final replacement = await machine.api.renew();
     // Write the complete replacement atomically in OS storage before dropping the old in-memory profile.
     await vault.save(machines.values.map((m) => m == machine ? replacement : m.profile).toList());
@@ -148,6 +155,7 @@ class Fleet extends ChangeNotifier with WidgetsBindingObserver {
     await refresh(full: true);
   }
   Future<void> remove(String id) async {
+    _requireWritable();
     final remaining = machines.values.where((m) => m.profile.id != id).map((m) => m.profile).toList();
     await vault.save(remaining); machines.remove(id)?.api.close();
     if (selected == id) selected = machines.keys.firstOrNull;

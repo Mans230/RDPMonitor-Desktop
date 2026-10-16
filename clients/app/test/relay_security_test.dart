@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:basic_utils/basic_utils.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pointycastle/export.dart' show AEADParameters, AESEngine, GCMBlockCipher, KeyParameter;
 import 'package:rdpmonitor/api.dart';
@@ -20,10 +21,10 @@ final _now = DateTime.fromMillisecondsSinceEpoch(1800000000000, isUtc: true);
 String _code([String origin = _origin]) => Uri(scheme: 'rdpmonitor', host: 'pair', queryParameters: {'relay': origin, 'v': '1'}, fragment: _secret).toString();
 Map<String, dynamic> _payload() => {'v': 1, 'agent_id': _agentId, 'route_id': _routeId, 'fingerprint': 'ab' * 32,
   'pairing_code': 'test_enrollment_capability_123456', 'route_token': _secret, 'expires': 1800000300, 'name': 'Fixture agent'};
-String _encrypt(Map<String, dynamic> payload) {
+String _encrypt(Map<String, dynamic> payload, [String origin = _origin]) {
   final nonce = Uint8List.fromList(List.generate(12, (index) => index));
   final cipher = GCMBlockCipher(AESEngine())..init(true, AEADParameters(KeyParameter(base64Url.decode('$_secret=')), 128,
-    nonce, Uint8List.fromList(utf8.encode('RDPMonitor.Pairing.v1\n$_origin'))));
+    nonce, Uint8List.fromList(utf8.encode('RDPMonitor.Pairing.v1\n$origin'))));
   return base64Url.encode([...nonce, ...cipher.process(Uint8List.fromList(utf8.encode(jsonEncode(payload))))]).replaceAll('=', '');
 }
 
@@ -126,6 +127,115 @@ class _Harness {
 }
 
 void main() {
+  test('Setup keeps independent canonical install and AES keys in the fragment', () {
+    final installation = Uri(scheme: 'rdpmonitor', host: 'install',
+      queryParameters: {'relay': _origin, 'v': '1'}, fragment: _secret).toString();
+    final setup = RelaySetupCode.create(installation);
+    final uri = Uri.parse(setup.code);
+    expect(uri.host, 'setup');
+    expect(uri.queryParameters.keys.toSet(), {'relay', 'v'});
+    expect(uri.query, isNot(contains(_secret)));
+    expect(uri.query, isNot(contains(setup.pairingToken)));
+    expect(setup.installationToken, _secret);
+    expect(setup.pairingToken, isNot(_secret));
+    expect(base64Url.decode(base64Url.normalize(setup.pairingToken)), hasLength(32));
+    expect(RelaySetupCode.parse(setup.code).connectionCode, setup.connectionCode);
+    expect(Uri.parse(setup.connectionCode).fragment, setup.pairingToken);
+    expect(Uri.parse(setup.connectionCode).query, isNot(contains(_secret)));
+  });
+  test('Setup rejects shared keys, malformed capabilities and query secret smuggling', () {
+    const other = '__________________________________________8';
+    final code = Uri(scheme: 'rdpmonitor', host: 'setup',
+      queryParameters: {'relay': _origin, 'v': '1'}, fragment: '$_secret.$other').toString();
+    expect(RelaySetupCode.parse(code).pairingToken, other);
+    for (final invalid in [
+      code.replaceFirst(other, _secret), '$code=', '$code.', code.replaceFirst('.$other', ''),
+      code.replaceFirst('v=1', 'v=1&v=1'), code.replaceFirst('v=1', 'v=2'),
+      code.replaceFirst('v=1', 'v=1&key=$other'), code.replaceFirst('setup?', 'install?'),
+      code.replaceFirst('setup?', 'setup/path?'), code.replaceFirst('setup?', 'setup?\n'),
+      code.replaceFirst(_secret, '%41${_secret.substring(1)}'), code.replaceFirst(other, 'A' * 42 + 'B'),
+    ]) {
+      expect(() => RelaySetupCode.parse(invalid), throwsA(isA<RelayException>()), reason: 'Reject ambiguous setup URI');
+    }
+  });
+  test('Pending setup securely round-trips issued state and bounds the not-ready window', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final installation = Uri(scheme: 'rdpmonitor', host: 'install',
+      queryParameters: {'relay': _origin, 'v': '1'}, fragment: _secret).toString();
+    final pending = PendingRelaySetup(setup: RelaySetupCode.create(installation), name: 'My VM', group: 'Production', expires: _now);
+    expect(pending.canInstall(_now.subtract(const Duration(seconds: 1))), isTrue);
+    expect(pending.canInstall(_now), isFalse);
+    expect(pending.canWait(_now.add(const Duration(seconds: 299))), isTrue);
+    expect(pending.canWait(_now.add(const Duration(seconds: 300))), isFalse);
+    await pending.save();
+    final restored = (await PendingRelaySetup.load())!;
+    expect(restored.setup.code, pending.setup.code);
+    expect(restored.name, 'My VM');
+    expect(restored.group, 'Production');
+    expect(restored.stage, RelaySetupStage.waiting);
+    await restored.withEnrollment().save();
+    expect((await PendingRelaySetup.load())!.stage, RelaySetupStage.enrolling);
+    final issued = restored.withEnrollment(profile: {'id': _agentId, 'certificate': 'protected issued checkpoint'});
+    await issued.save();
+    expect((await PendingRelaySetup.load())!.profile, issued.profile);
+    expect(() => PendingRelaySetup.fromJson({...pending.toJson(), 'stage': 'enrolled'}), throwsA(isA<RelayException>()));
+    expect(() => PendingRelaySetup.fromJson({...pending.toJson(), 'extra': true}), throwsA(isA<RelayException>()));
+    await PendingRelaySetup.clear();
+    expect(await PendingRelaySetup.load(), isNull);
+    await const FlutterSecureStorage().write(key: 'rdpmonitor.pending-relay-setup.v1', value: 'not-json');
+    await expectLater(PendingRelaySetup.load(), throwsA(isA<RelayException>()));
+  });
+  test('Only 404 is pending; errors stay visible and broker never receives either setup key', () async {
+    final broker = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final origin = 'http://127.0.0.1:${broker.port}';
+    const installToken = '__________________________________________8';
+    final setup = RelaySetupCode.parse(Uri(scheme: 'rdpmonitor', host: 'setup',
+      queryParameters: {'relay': origin, 'v': '1'}, fragment: '$installToken.$_secret').toString());
+    final lookup = RelayPairingLookup(setup.connectionCode);
+    var status = 404;
+    final seen = <String>[];
+    broker.listen((request) async {
+      seen.add('${request.method} ${request.uri} ${request.headers.value(HttpHeaders.authorizationHeader) ?? ''}');
+      request.response.statusCode = status;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(status == 200
+        ? {'ciphertext': _encrypt({..._payload(), 'expires': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 300}, origin)}
+        : {'error': 'Untrusted echo: ${setup.code}'}));
+      await request.response.close();
+    });
+    try {
+      expect(await lookup.poll(), isNull);
+      for (final failure in [429, 401, 503]) {
+        status = failure;
+        await expectLater(lookup.poll(), throwsA(isA<RelayHttpException>()
+          .having((error) => error.status, 'status', failure)
+          .having((error) => error.toString(), 'safe diagnostics', isNot(contains(_secret)))));
+      }
+      status = 200;
+      final pairing = (await lookup.poll())!;
+      expect(pairing.agentId, _agentId);
+      expect(pairing.route.origin, origin);
+      expect(seen, hasLength(5));
+      for (final request in seen) {
+        expect(request, startsWith('GET /api/v1/pairings/${sha256.convert(base64Url.decode('$_secret='))}'));
+        expect(request, isNot(contains('?')));
+        expect(request, isNot(contains(_secret)));
+        expect(request, isNot(contains(installToken)));
+        expect(request, isNot(contains('Bearer')));
+      }
+    } finally { lookup.close(); await broker.close(force: true); }
+  });
+  test('Closing a waiting lookup aborts its in-flight request without enrollment', () async {
+    final broker = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final seen = Completer<void>();
+    broker.listen((request) { if (!seen.isCompleted) seen.complete(); });
+    final lookup = RelayPairingLookup(_code('http://127.0.0.1:${broker.port}'));
+    final failure = expectLater(lookup.poll(), throwsA(isA<RelayException>()));
+    await seen.future;
+    lookup.close();
+    await failure;
+    await broker.close(force: true);
+  });
   test('Python AES-256-GCM envelope decrypts with exact origin AAD', () {
     final pairing = RelayPairing.decode(_code(), _pythonCiphertext, now: _now);
     expect(pairing.agentId, _agentId);

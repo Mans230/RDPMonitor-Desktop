@@ -12,6 +12,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 from uuid import uuid4
 
 import httpx
@@ -22,9 +23,10 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from websockets.asyncio.client import connect
 
-from agent import relay
+from agent import relay, setup
 from agent.contracts import OperationError
-from relay.protocol import new_token, parse_invitation
+from relay.protocol import (decode_secret, decrypt_pairing, encode_secret, make_invitation,
+                            make_setup_invitation, new_token, parse_invitation, parse_setup_invitation)
 from relay.server import create_app
 from relay.websocket import RelayWebSocketProtocol
 
@@ -61,6 +63,124 @@ class RelayBoundaryTests(unittest.TestCase):
             self.assertEqual(error.exception.code, "relay_configuration")
             self.assertNotIn(secret, str(error.exception))
             self.assertNotIn(secret, error.exception.message)
+
+    def test_supplied_desktop_key_requires_local_consent_and_never_enters_broker_payload(self):
+        now = int(time.time())
+        key = bytes(range(32))
+        settings = relay._Settings("https://relay.example", str(uuid4()), str(uuid4()), "Local VM", new_token())
+        approval = {"code": "test_local_approval_capability", "expires": datetime.fromtimestamp(now + 300, timezone.utc).isoformat(),
+                    "agent_id": settings.agent_id, "fingerprint": "ab" * 32}
+        grant_token = new_token()
+        calls = []
+
+        def request(origin, path, payload, *, token=None):
+            calls.append((origin, path, payload, token))
+            if path.endswith("/grants"):
+                return {"grant_id": str(uuid4()), "route_token": grant_token}
+            return {"published": True}
+
+        with mock.patch.object(relay, "_require_local_admin") as consent, \
+                mock.patch.object(relay, "_load_settings", return_value=settings), \
+                mock.patch.object(relay, "WorkerProxy") as worker, \
+                mock.patch.object(relay, "_request", side_effect=request):
+            worker.return_value.rpc.return_value = approval
+            result = relay.publish_connection_code(Path("unused"), role="viewer", ttl=300, secret=key)
+            consent.assert_called_once_with()
+            worker.return_value.rpc.assert_called_once_with("pairing.begin", {"ttl_seconds": 300, "role": "viewer"})
+        invitation = parse_invitation(result["code"], kind="pair")
+        self.assertEqual(invitation.secret, key)
+        published = calls[1][2]
+        self.assertEqual(set(published), {"lookup_id", "ciphertext", "expires"})
+        self.assertEqual(published["lookup_id"], invitation.lookup_id)
+        self.assertNotIn(encode_secret(key), json.dumps(calls))
+        self.assertNotIn(approval["code"], json.dumps(calls))
+        payload = decrypt_pairing(settings.relay_origin, key, published["ciphertext"])
+        self.assertEqual(payload["route_token"], grant_token)
+        self.assertEqual(payload["pairing_code"], approval["code"])
+        self.assertEqual(payload["fingerprint"], approval["fingerprint"])
+        with self.assertRaises(ValueError):
+            decrypt_pairing(settings.relay_origin, decode_secret(settings.agent_token), published["ciphertext"])
+
+    def test_bad_desktop_key_or_worker_identity_never_allocates_a_broker_grant(self):
+        settings = relay._Settings("https://relay.example", str(uuid4()), str(uuid4()), "Local VM", new_token())
+        with mock.patch.object(relay, "_require_local_admin"), \
+                mock.patch.object(relay, "_load_settings", return_value=settings), \
+                mock.patch.object(relay, "WorkerProxy") as worker, \
+                mock.patch.object(relay, "_request") as request:
+            for secret in (b"short", "A" * 32, bytearray(32)):
+                with self.subTest(secret_type=type(secret)), self.assertRaises(OperationError):
+                    relay.publish_connection_code(Path("unused"), secret=secret)
+            worker.assert_not_called()
+            worker.return_value.rpc.return_value = {"agent_id": str(uuid4()), "code": "test_local_approval_capability",
+                "expires": datetime.now(timezone.utc).isoformat(), "fingerprint": "ab" * 32}
+            with self.assertRaises(OperationError):
+                relay.publish_connection_code(Path("unused"), secret=bytes(range(32)))
+            request.assert_not_called()
+
+    def test_desktop_setup_key_never_bypasses_local_administrator_approval(self):
+        with mock.patch.object(relay, "current_identity", return_value={"admin": False}), \
+                mock.patch.object(relay, "WorkerProxy") as worker, \
+                mock.patch.object(relay, "_request") as request:
+            with self.assertRaises(OperationError) as error:
+                relay.publish_connection_code(Path("unused"), secret=bytes(range(32)), role="viewer")
+            self.assertEqual(error.exception.code, "local_admin_required")
+            worker.assert_not_called()
+            request.assert_not_called()
+
+
+class NativeSetupCodeTests(unittest.TestCase):
+    def test_native_exchange_strips_pairing_key_before_registration_and_keeps_legacy_input(self):
+        key = bytes(range(32))
+        install_token = encode_secret(bytes(range(32, 64)))
+        new_code = make_setup_invitation("https://relay.example", install_token, key)
+        legacy = make_invitation("install", "https://relay.example", install_token)
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(setup, "data_directory", return_value=Path(temporary)), \
+                mock.patch.object(setup, "verify_protected_tree"):
+            path = Path(temporary)
+            for code, expected_key in ((new_code, key), (legacy, None)):
+                invitation = path / "invitation.txt"
+                invitation.write_text(code, encoding="utf-8")
+                registration_code, supplied_key = setup._installation_input(path)
+                self.assertEqual(parse_invitation(registration_code, kind="install").token, install_token)
+                self.assertEqual(supplied_key, expected_key)
+                self.assertNotIn(encode_secret(key), registration_code)
+                self.assertFalse(invitation.exists())
+            invitation.write_text(new_code + "=", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                setup._installation_input(path)
+            self.assertFalse(invitation.exists())
+            settings_file = relay.relay_settings_path(path)
+            settings_file.parent.mkdir()
+            settings_file.write_text("existing identity", encoding="utf-8")
+            self.assertEqual(setup._installation_input(path), (None, None))
+            invitation.write_text(new_code, encoding="utf-8")
+            with self.assertRaises(ValueError):
+                setup._installation_input(path)
+            self.assertEqual(settings_file.read_text(), "existing identity")
+
+    def test_native_pairing_uses_protected_setup_key_and_forced_viewer_then_legacy_random_key(self):
+        key = bytes(range(32))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            deployment = {"release": str(path), "read_only": True, "unsigned_preview": True}
+            (path / "pairing-key.txt").write_text(encode_secret(key), encoding="ascii")
+            published = {"code": "private_manual_recovery_code", "expires": int(time.time()) + 300}
+            with mock.patch.object(setup, "_session", return_value=path), \
+                    mock.patch.object(setup, "_deployment", return_value=deployment), \
+                    mock.patch.object(setup, "verify_protected_tree"), \
+                    mock.patch.object(setup, "_ready") as ready, \
+                    mock.patch.object(setup, "_write", side_effect=lambda file, value: file.write_text(value, encoding="utf-8")), \
+                    mock.patch.object(relay, "publish_connection_code", return_value=published) as publish:
+                setup.pair("unused")
+                ready.assert_called_once_with(deployment)
+                self.assertEqual(publish.call_args.kwargs, {"role": "viewer", "ttl": 300, "secret": key})
+                self.assertEqual((path / "automatic.txt").read_text(), "1")
+                self.assertIn("no second code", (path / "status.txt").read_text())
+                self.assertFalse((path / "pairing-key.txt").exists())
+                setup.pair("unused")
+                self.assertEqual(publish.call_args.kwargs, {"role": "viewer", "ttl": 300, "secret": None})
+                self.assertEqual((path / "automatic.txt").read_text(), "0")
 
 
 
@@ -143,6 +263,44 @@ class RelaySocketTests(unittest.IsolatedAsyncioTestCase):
                 return
             await asyncio.sleep(0.05)
         self.fail("Actual connector did not become online")
+
+    async def test_one_setup_code_registers_then_resolves_only_desktop_key_at_real_broker(self):
+        response = await self.http.post("/api/v1/installations", headers=self.admin_headers, json={"ttl_seconds": 900})
+        installation = parse_invitation(response.json()["invitation"], kind="install", allow_loopback=True)
+        key = bytes(range(32))
+        code = make_setup_invitation(self.origin, installation.token, key, allow_loopback=True)
+        setup_code = parse_setup_invitation(code, allow_loopback=True)
+        pairing = parse_invitation(setup_code.connection_code, kind="pair", allow_loopback=True)
+        self.assertEqual((await self.http.get(f"/api/v1/pairings/{pairing.lookup_id}")).status_code, 404)
+        agent_id = str(uuid4())
+        registration_payload = {"invitation_token": parse_invitation(setup_code.installation_code,
+            kind="install", allow_loopback=True).token, "agent_id": agent_id, "name": "One-code VM"}
+        self.assertNotIn(encode_secret(key), json.dumps(registration_payload))
+        registered = await self.http.post("/api/v1/agents/register", json=registration_payload)
+        self.assertEqual(registered.status_code, 200)
+        credentials = registered.json()
+        settings = relay._Settings(self.origin, agent_id, credentials["route_id"], "One-code VM", credentials["agent_token"])
+        approval = {"agent_id": agent_id, "code": "one_use_local_approval_capability",
+            "fingerprint": "ab" * 32, "expires": datetime.fromtimestamp(int(time.time()) + 300, timezone.utc).isoformat()}
+        with mock.patch.object(relay, "_require_local_admin"), \
+                mock.patch.object(relay, "_load_settings", return_value=settings), \
+                mock.patch.object(relay, "WorkerProxy") as worker:
+            worker.return_value.rpc.return_value = approval
+            published = await asyncio.to_thread(relay.publish_connection_code, Path("unused"),
+                role="viewer", ttl=300, secret=setup_code.pairing_secret, allow_loopback=True)
+        self.assertEqual(published["code"], setup_code.connection_code)
+        envelope = await self.http.get(f"/api/v1/pairings/{pairing.lookup_id}")
+        self.assertEqual(envelope.status_code, 200)
+        payload = decrypt_pairing(self.origin, key, envelope.json()["ciphertext"], allow_loopback=True)
+        self.assertEqual(payload["agent_id"], agent_id)
+        self.assertEqual(payload["pairing_code"], approval["code"])
+        with self.assertRaises(ValueError):
+            decrypt_pairing(self.origin, setup_code.install_secret, envelope.json()["ciphertext"], allow_loopback=True)
+        self.assertEqual((await self.http.post("/api/v1/agents/register", json=registration_payload)).status_code, 401)
+        self.assertEqual((await self.http.get(f"/api/v1/pairings/{installation.lookup_id}")).status_code, 404)
+        database = (self.directory / "relay.sqlite3").read_bytes()
+        self.assertNotIn(encode_secret(key).encode("ascii"), database)
+        self.assertNotIn(approval["code"].encode("ascii"), database)
 
     def _tls_contexts(self):
         key = ec.generate_private_key(ec.SECP256R1())

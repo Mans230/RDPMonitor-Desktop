@@ -6,9 +6,9 @@ The client uses Flutter widgets, not a WebView. Telegram and the browser panel h
 
 **Windows preview · MIT open source · unsigned monitoring-only installer**
 
-[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.0-preview.2) · [Install and connect through your relay](docs/DESKTOP-DEPLOYMENT.md#install-anywhere-and-connect-with-a-code) · [Security](SECURITY.md)
+[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.0-preview.3) · [Install and connect through your relay](docs/DESKTOP-DEPLOYMENT.md#install-anywhere-and-connect-with-a-code) · [Security](SECURITY.md)
 
-![Native RDPMonitor desktop showing actual read-only agent telemetry](docs/images/desktop-overview.png)
+![Native Backups workspace with responsive command cards connected to a local read-only agent fixture](docs/images/desktop-overview.png)
 
 The desktop redesign uses bundled Geist typography, slate/teal light and dark themes, grouped machine tools, explicit connection/access context, searchable fleet rows and loaded-history chart controls. It remains a native Flutter app with real agent data, not a browser wrapper or a dashboard mockup.
 
@@ -37,15 +37,24 @@ An operator must first deploy the supplied relay with a domain and valid HTTPS. 
 
 1. On your operator PC, extract the Windows preview ZIP and run `client\rdpmonitor.exe`. Keep its adjacent runtime files.
 2. Open **Relay settings** from the connection menu. Save your relay's HTTPS origin and private administration key once; they go into OS-protected storage.
-3. Choose **Prepare agent installation** and copy its one-use installation invitation to the VM.
-4. On the Windows VM, run `RDPMonitor-1.0.0-windows-x64-UNSIGNED-PREVIEW-setup.exe` from the [prerelease](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.0-preview.2). Approve administrator elevation and the explicit unsigned-preview warning, then paste the invitation. The preview is **forced monitoring-only**.
-5. Copy the private five-minute connection code from setup into **Connect with code** on the operator PC. No VM IP address or manual certificate fingerprint entry is needed in this mode.
+3. Choose **Add machine**, enter its name and optional group, then choose **Create setup code**.
+4. Use **Copy installer link** to download Preview 3 on the Windows VM. Run setup, approve administrator elevation and the explicit unsigned-preview warning, then paste the single private VM setup code. The preview is **forced monitoring-only**.
+5. The desktop waits, verifies the encrypted agent identity and enrolls automatically. **No second code, VM address or manual fingerprint entry is required.** Close and reopen Add machine to resume its protected pending setup.
 
 The native setup installs the complete runtime and boot-time services with a loopback-only gateway and outbound relay connector. Reopen the same installer to generate a fresh code or repair that release; do not reuse a consumed installation invitation. Desktop exit does not stop the agent.
 
-Installation invitations authorize relay resource registration, not Windows administration. Connection codes privately carry an authenticated, encrypted agent identity and one-use enrollment approval. Neither code belongs in a browser, command-line argument, issue or public screenshot. Clipboard history can retain copied secrets.
+The setup code carries independent registration and pairing capabilities. Only the registration token reaches the relay; the pairing key authenticates the VM's encrypted identity envelope locally. Setup codes belong only in native VM setup, never a browser, command line, issue or public screenshot. The ordinary installer download link is public. Clipboard history can retain copied secrets.
 
 The installer is a preview, not proof of an accepted deployment. **Installed SCM identities, reboot/logoff and clean-VM repair/uninstall remain unvalidated on a disposable VM.** Use a disposable Windows VM first. This is not a signed production release; do not bypass the separate production signature checks.
+
+### Fleet workspace
+
+- Machines are grouped in a searchable table with live/retained disk used, total and free space, contract expiry, renewal date and cost estimate. Edit a profile or choose **Edit renewal dates**; dates are local calendar days, costs use exact two-decimal amounts and an editable currency/billing period.
+- Contract metadata stays in the client vault and survives device-certificate renewal. It does not charge a payment method, renew a provider contract or extend certificate access.
+- **Backups**, **Recovery**, **Processes** and **Services** have separate sections. Related command groups show one, two or three natural-height cards according to the actual available content width.
+- Use **Hide sidebar / Show sidebar** on wide windows; narrower windows use a navigation drawer. Tables scroll horizontally instead of hiding contract columns or overflowing.
+- Advanced **Connect with code** remains available for already-installed agents and interrupted setup recovery. Issued identities are checkpointed before the final authenticated probe, so verification/save retries do not repeat enrollment.
+
 
 For the relay's one-time deployment, native installer builds and the advanced direct connection method, see [deployment instructions](docs/DESKTOP-DEPLOYMENT.md).
 
@@ -130,7 +139,7 @@ flutter analyze
 
 Tests exercise policy, certificate/replay/revocation boundaries, durable jobs/revisions, encrypted persistence, upload isolation/integrity and backup/recovery errors without changing host firewall/accounts/power.
 
-Latest Windows checks: **144 backend tests and 14 client tests passed**, `flutter analyze` reported no issues, and the native Windows client and bundled agent builds succeeded.
+Latest Windows checks: **187 backend tests and 25 client tests passed**, `flutter analyze` reported no issues, and the native Windows debug client built and ran.
 
 The local integration smoke exercised the exact packaged worker and gateway executables over real named-pipe IPC, certificate enrollment, authenticated HTTPS telemetry/history, an overview job, duplicate-request identity, read-only denials and certificate revocation. The packaged hidden helper returned authenticated status for the signed-in session. IPC regressions cover OS-derived identity, concurrent clients, clean shutdown and protected worker-file ACLs. Snapshot reads use the persistent sampler; history projects bounded numeric measurements instead of repeating process inventories.
 
@@ -139,6 +148,9 @@ The native Windows UI was exercised against that agent, including CPU/core-count
 The redesigned UI was additionally exercised through real enrollment, live telemetry and loaded-history filtering. Light, dark and narrow-window layouts were inspected from native Flutter renderer captures; the screenshot above is actual agent data. RDP desktop/window capture remained inconsistent, so renderer captures were used rather than substituting a mockup. Clean-machine installed visual acceptance remains open.
 
 The relay flow was additionally exercised against the actual broker CLI and bundled worker/gateway: native invitation creation and encrypted-code enrollment, real mTLS telemetry, a durable view job and duplicate-request identity, read-only/viewer denials, a streamed SHA256-verified chart, revocation on an unchanged live TLS socket, renewal, broker loss/reconnect without job replay, and desktop process exit/relaunch using the OS-protected route and renewed credentials. Windows ACL checks reproduced and fixed loss of gateway ancestor-descriptor access without granting access to worker files. Real selector sockets exercised hard-abort cleanup of a stalled reader while quotas remained reserved.
+
+Preview 3 was exercised through native name/group entry, single-code creation, pending close/reopen, real broker registration and automatic pinned/mTLS enrollment without a return code. Actual disk telemetry, contract editing and certificate renewal retained exact dates/costs. Native captures verified two/three-column Backups cards, hidden/open sidebar and a narrow drawer. A deliberately failed final mTLS probe preserved the issued identity across dialog close/reopen and then saved it without another device issuance. A genuine pinned response that previously stayed pending beyond 58 seconds now timed out after 30 seconds.
+
 
 These were isolated local fixtures, not an installed SCM or public relay deployment. Numeric-loopback HTTP was enabled explicitly for the development broker; release clients and installers require HTTPS. Fixture provisioning used the native-verified service SID without registering a service. Container/Caddy/public HTTPS deployment, production publisher signing and clean-VM installation/reboot remain external acceptance gates.
 

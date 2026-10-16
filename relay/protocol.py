@@ -13,7 +13,7 @@ import json
 import re
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import UUID
 
@@ -148,6 +148,57 @@ def parse_invitation(value: str, *, kind: str, allow_loopback: bool = False) -> 
         return Invitation(kind, origin, decode_secret(parsed.fragment))
     except (ValueError, TypeError, KeyError):
         raise ProtocolError("Invitation is invalid or uses an unsupported version.") from None
+
+
+@dataclass(frozen=True)
+class SetupInvitation:
+    """Two independent capabilities; only the installation token reaches registration."""
+    origin: str
+    install_secret: bytes = field(repr=False)
+    pairing_secret: bytes = field(repr=False)
+
+    @property
+    def installation_code(self) -> str:
+        return make_invitation("install", self.origin, encode_secret(self.install_secret),
+                               allow_loopback=self.origin.startswith("http://"))
+
+    @property
+    def connection_code(self) -> str:
+        return make_invitation("pair", self.origin, encode_secret(self.pairing_secret),
+                               allow_loopback=self.origin.startswith("http://"))
+
+
+def make_setup_invitation(origin: str, install_token: str, pairing_secret: bytes, *,
+                          allow_loopback: bool = False) -> str:
+    install_secret = decode_secret(install_token)
+    pairing_token = encode_secret(pairing_secret)
+    if install_secret == pairing_secret:
+        raise ProtocolError("Setup requires independent installation and pairing capabilities.")
+    origin = normalize_origin(origin, allow_loopback=allow_loopback)
+    return f"rdpmonitor://setup?{urlencode({'relay': origin, 'v': '1'})}#{install_token}.{pairing_token}"
+
+
+def parse_setup_invitation(value: str, *, allow_loopback: bool = False) -> SetupInvitation:
+    try:
+        if not isinstance(value, str) or len(value) > 4096:
+            raise ValueError
+        value = value.strip()
+        if re.search(r"[\x00-\x20\x7f\\]", value):
+            raise ValueError
+        parsed = urlsplit(value)
+        query = parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
+        if (parsed.scheme != "rdpmonitor" or parsed.netloc != "setup" or parsed.path
+                or set(query) != {"relay", "v"} or query["v"] != ["1"]
+                or len(query["relay"]) != 1):
+            raise ValueError
+        install_token, pairing_token = parsed.fragment.split(".")
+        install_secret, pairing_secret = decode_secret(install_token), decode_secret(pairing_token)
+        if install_secret == pairing_secret:
+            raise ValueError
+        return SetupInvitation(normalize_origin(query["relay"][0], allow_loopback=allow_loopback),
+                               install_secret, pairing_secret)
+    except (ValueError, TypeError, KeyError):
+        raise ProtocolError("Setup code is invalid or uses an unsupported version.") from None
 
 
 def validate_pairing(payload: object, *, now: float | None = None) -> dict:

@@ -91,8 +91,14 @@ end;
 procedure ShowCode;
 begin
   CodeMemo.Text := ReadResult('connection.txt');
-  CodeLabel.Caption := ReadResult('status.txt') + #13#10 + 'Expires (Unix UTC seconds): ' + ReadResult('expires.txt') + #13#10 +
-    'Paste into Connect with code in the desktop app. Treat this URI like a password.';
+  if ReadResult('automatic.txt') = '1' then
+    CodeLabel.Caption := ReadResult('status.txt') + #13#10 +
+      'Keep Add machine open on the originating desktop (or reopen it to resume). The code below is optional manual recovery only; private, single-use, expires after five minutes.'
+  else
+    CodeLabel.Caption := ReadResult('status.txt') + #13#10 + 'Expires (Unix UTC seconds): ' + ReadResult('expires.txt') + #13#10 +
+      'Paste into advanced Connect with code in the desktop app. Treat this URI like a password.';
+  if ReadResult('automatic.txt') = '1' then RefreshButton.Caption := 'New manual code'
+  else RefreshButton.Caption := 'Generate fresh code';
 end;
 
 procedure CopyCode(Sender: TObject);
@@ -104,6 +110,8 @@ end;
 procedure RefreshCode(Sender: TObject);
 var Agent: String;
 begin
+  if ReadResult('automatic.txt') = '1' then
+    if MsgBox('Generate a new advanced recovery code? This replaces the VM pairing approval, so automatic enrollment may stop. Use the new code with advanced Connect with code on your desktop.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then exit;
   Agent := InstalledRelease + '\agent\RDPMonitorAgent.exe';
   if InvokeHelper(Agent, 'pair --session ' + Session) then ShowCode
   else MsgBox(ReadResult('status.txt'), mbError, MB_OK);
@@ -138,9 +146,9 @@ begin
   ModePage.Add('Pair installed agent: generate a new five-minute connection code');
   ModePage.Add('Repair the same release: preserve identity, devices, relay and stored data');
   ModePage.SelectedValueIndex := 0;
-  InvitationPage := CreateInputQueryPage(ModePage.ID, 'Connect to your self-hosted relay', 'Paste the private installation invitation from Prepare agent installation',
-    'No public relay is supplied. Your relay must have valid HTTPS. The invitation is redeemed once and is never sent in process arguments or setup logs.');
-  InvitationPage.Add('Private installation invitation:', True);
+  InvitationPage := CreateInputQueryPage(ModePage.ID, 'Add this VM to your desktop', 'Paste the private setup code from Add machine',
+    'Approve enrollment to your self-hosted relay with valid HTTPS. New setup codes connect automatically to the originating desktop. Legacy installation invitations remain supported. Nothing is sent in process arguments or setup logs.');
+  InvitationPage.Add('Private setup code (or legacy installation invitation):', True);
   ReadOnlyCheck := TNewCheckBox.Create(InvitationPage);
   ReadOnlyCheck.Parent := InvitationPage.Surface;
   ReadOnlyCheck.Top := InvitationPage.Edits[0].Top + InvitationPage.Edits[0].Height + ScaleY(24);
@@ -194,7 +202,7 @@ begin
   end;
   if (CurPageID = InvitationPage.ID) and not Registered then begin
     if (Length(Trim(InvitationPage.Values[0])) < 60) or (Length(InvitationPage.Values[0]) > 8192) then begin
-      MsgBox('Paste a complete private rdpmonitor://install invitation.', mbError, MB_OK);
+      MsgBox('Paste a complete private rdpmonitor://setup code (or legacy rdpmonitor://install invitation).', mbError, MB_OK);
       Result := False;
     end;
 #ifndef UnsignedPreview
@@ -251,7 +259,7 @@ begin
       WizardForm.FinishedHeadingLabel.Caption := 'Setup requires attention';
       WizardForm.FinishedLabel.Caption := ReadResult('status.txt') + #13#10#13#10 +
         'The runtime was installed, but relay setup or pairing did not complete. Do not treat this as a completed connection.' + #13#10#13#10 +
-        'Rerun this installer to repair the same release or generate a fresh code. If the invitation was rejected, prepare a new invitation in the desktop app. Identity and saved data are preserved.';
+        'Rerun this installer to repair the same release or generate a fresh code for advanced Connect with code. If registration was rejected, discard the pending setup and create a new setup code in Add machine. Identity and saved data are preserved.';
       WizardForm.FinishedLabel.Visible := True;
       WizardForm.FinishedLabel.AutoSize := False;
       WizardForm.FinishedLabel.Height := WizardForm.FinishedPage.ClientHeight - WizardForm.FinishedLabel.Top - ScaleY(8);
@@ -273,7 +281,9 @@ begin
     CopyButton.SetBounds(CodeLabel.Left, CodeMemo.Top + CodeMemo.Height + ScaleY(12), ScaleX(150), ScaleY(28));
     RefreshButton.SetBounds(CodeLabel.Left + ScaleX(165), CopyButton.Top, ScaleX(150), ScaleY(28));
     WizardForm.FinishedLabel.Visible := False;
-    WizardForm.FinishedHeadingLabel.Caption := 'Installed: private connection code';
+    if ReadResult('automatic.txt') = '1' then
+      WizardForm.FinishedHeadingLabel.Caption := 'Installed: ready for your desktop'
+    else WizardForm.FinishedHeadingLabel.Caption := 'Installed: private connection code';
   end;
 end;
 

@@ -17,6 +17,13 @@ class RelayException implements Exception {
   String toString() => message;
 }
 
+class RelayHttpException extends RelayException {
+  final int status;
+  RelayHttpException(this.status) : super(status == 429
+    ? 'Relay limit reached (429). Pause other requests or check relay capacity before retrying.'
+    : 'Relay request failed ($status). Check availability and credential expiry.');
+}
+
 final _uuid = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
 final _token = RegExp(r'^[A-Za-z0-9_-]{43}$');
 String _id(dynamic value) {
@@ -127,6 +134,117 @@ class _Invitation {
   }
 }
 
+/// A VM setup capability keeps installation authority separate from envelope decryption.
+class RelaySetupCode {
+  final String origin;
+  final String installationToken;
+  final String pairingToken;
+  RelaySetupCode._(this.origin, this.installationToken, this.pairingToken);
+
+  factory RelaySetupCode.create(String installationInvitation) {
+    final install = _Invitation.parse(installationInvitation, 'install');
+    final random = Random.secure();
+    String pairing;
+    do { pairing = _encode(List<int>.generate(32, (_) => random.nextInt(256))); }
+    while (pairing == _encode(install.secret));
+    return RelaySetupCode._(install.origin, _encode(install.secret), pairing);
+  }
+
+  factory RelaySetupCode.parse(String value) {
+    try {
+      if (value.length > 4096) throw const FormatException();
+      final text = value.trim();
+      if (RegExp(r'[\x00-\x20\x7f\\]').hasMatch(text)) throw const FormatException();
+      final uri = Uri.parse(text);
+      final query = uri.queryParametersAll;
+      final fragment = text.split('#');
+      if (uri.scheme != 'rdpmonitor' || uri.authority != 'setup' || uri.path.isNotEmpty ||
+          uri.query.split('&').any((part) => part.isEmpty || !part.contains('=')) ||
+          query.length != 2 || query['v']?.length != 1 || query['v']?.single != '1' ||
+          query['relay']?.length != 1 || fragment.length != 2) {
+        throw const FormatException();
+      }
+      final tokens = fragment.last.split('.');
+      if (tokens.length != 2 || tokens[0] == tokens[1]) throw const FormatException();
+      _secret(tokens[0]); _secret(tokens[1]);
+      return RelaySetupCode._(normalizeRelayOrigin(query['relay']!.single), tokens[0], tokens[1]);
+    } catch (_) {
+      throw const RelayException('Setup code is invalid or uses an unsupported version.');
+    }
+  }
+
+  String get code => Uri(scheme: 'rdpmonitor', host: 'setup',
+    queryParameters: {'relay': origin, 'v': '1'}, fragment: '$installationToken.$pairingToken').toString();
+  String get connectionCode => Uri(scheme: 'rdpmonitor', host: 'pair',
+    queryParameters: {'relay': origin, 'v': '1'}, fragment: pairingToken).toString();
+}
+
+enum RelaySetupStage { waiting, enrolling, enrolled }
+
+/// A single recoverable installation intent, stored only in the OS credential vault.
+/// An interrupted enrollment is never silently retried: the one-use approval may
+/// already have been consumed. Successfully issued credentials survive save retries.
+class PendingRelaySetup {
+  static const _key = 'rdpmonitor.pending-relay-setup.v1';
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
+  );
+  final RelaySetupCode setup;
+  final String name;
+  final String group;
+  final DateTime expires;
+  final RelaySetupStage stage;
+  final Map<String, dynamic>? profile;
+  PendingRelaySetup({required this.setup, required this.name, required this.group, required this.expires,
+    this.stage = RelaySetupStage.waiting, this.profile});
+  DateTime get waitUntil => expires.add(const Duration(minutes: 5));
+  bool canWait([DateTime? now]) => (now ?? DateTime.now()).isBefore(waitUntil);
+  bool canInstall([DateTime? now]) => (now ?? DateTime.now()).isBefore(expires);
+  PendingRelaySetup withEnrollment({Map<String, dynamic>? profile}) => PendingRelaySetup(
+    setup: setup, name: name, group: group, expires: expires,
+    stage: profile == null ? RelaySetupStage.enrolling : RelaySetupStage.enrolled, profile: profile);
+
+  Map<String, dynamic> toJson() => {'v': 1, 'setup': setup.code, 'name': name, 'group': group,
+    'expires': expires.toUtc().millisecondsSinceEpoch, 'stage': stage.name, 'profile': profile};
+  factory PendingRelaySetup.fromJson(Map<String, dynamic> value) {
+    if (!_keys(value, {'v', 'setup', 'name', 'group', 'expires', 'stage', 'profile'}) || value['v'] != 1 ||
+        value['setup'] is! String || value['name'] is! String || (value['name'] as String).trim().isEmpty ||
+        (value['name'] as String).length > 128 || value['group'] is! String || (value['group'] as String).length > 128 ||
+        RegExp(r'[\x00-\x1f]').hasMatch('${value['name']}${value['group']}') || value['expires'] is! int ||
+        !RelaySetupStage.values.any((stage) => stage.name == value['stage']) ||
+        (value['profile'] != null && value['profile'] is! Map<String, dynamic>)) {
+      throw const RelayException('Protected pending setup is invalid. Restore credential storage before continuing.');
+    }
+    final stage = RelaySetupStage.values.singleWhere((stage) => stage.name == value['stage']);
+    if ((stage == RelaySetupStage.enrolled) != (value['profile'] != null)) {
+      throw const RelayException('Protected pending enrollment is incomplete.');
+    }
+    return PendingRelaySetup(setup: RelaySetupCode.parse(value['setup']), name: value['name'], group: value['group'],
+      expires: DateTime.fromMillisecondsSinceEpoch(value['expires'], isUtc: true), stage: stage, profile: value['profile']);
+  }
+  static Future<PendingRelaySetup?> load() async {
+    final raw = await _storage.read(key: _key);
+    if (raw == null) return null;
+    try {
+      final value = jsonDecode(raw);
+      if (value is! Map<String, dynamic>) throw const FormatException();
+      return PendingRelaySetup.fromJson(value);
+    } catch (_) {
+      throw const RelayException('Protected pending setup cannot be read. Do not enroll again until OS credential storage is restored.');
+    }
+  }
+  Future<void> save() async {
+    final raw = jsonEncode(toJson());
+    await _storage.write(key: _key, value: raw);
+    if (await _storage.read(key: _key) != raw) throw const RelayException('Pending setup could not be verified in OS credential storage. Keep this dialog open and retry.');
+  }
+  static Future<void> clear() async {
+    await _storage.delete(key: _key);
+    if (await _storage.read(key: _key) != null) throw const RelayException('Pending setup could not be removed from OS credential storage.');
+  }
+}
+
 class RelayInstallationInvitation {
   final String invitation;
   final DateTime expires;
@@ -144,6 +262,8 @@ class RelayAdminClient {
     if (value['invitation'] is! String || value['expires'] is! int) throw const RelayException('Relay returned an invalid installation invitation.');
     final invitation = _Invitation.parse(value['invitation'], 'install');
     if (invitation.origin != _http.origin) throw const RelayException('Relay returned an invitation for a different origin.');
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (value['expires'] <= now || value['expires'] > now + ttlSeconds + 60) throw const RelayException('Relay returned an invalid installation lifetime. Check both machines’ clocks.');
     return RelayInstallationInvitation(invitation: value['invitation'], expires: DateTime.fromMillisecondsSinceEpoch((value['expires'] as int) * 1000, isUtc: true));
   }
   Future<List<Map<String, dynamic>>> agents() async {
@@ -200,7 +320,7 @@ class _RelayHttp {
       return buffer;
     });
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw RelayException('Relay request failed (${response.statusCode}). Check availability and credential expiry.');
+      throw RelayHttpException(response.statusCode);
     }
     final value = jsonDecode(utf8.decode(bytes));
     if (value is! Map<String, dynamic>) throw const RelayException('Relay returned an invalid response.');
@@ -265,6 +385,29 @@ class RelayPairing {
     return RelayPairing._(agentId, payload['fingerprint'], payload['pairing_code'], payload['name'],
       DateTime.fromMillisecondsSinceEpoch(expiry * 1000, isUtc: true), RelayRoute(origin: invitation.origin, routeId: routeId, token: payload['route_token']));
   }
+}
+
+/// Owns a cancellable lookup session. Only HTTP 404 means "VM not ready".
+/// The caller must serialize polls and leave at least three seconds between them.
+class RelayPairingLookup {
+  final String connectionCode;
+  final _Invitation _invitation;
+  late final _RelayHttp _http;
+  RelayPairingLookup(this.connectionCode) : _invitation = _Invitation.parse(connectionCode, 'pair') {
+    _http = _RelayHttp(_invitation.origin);
+  }
+  Future<RelayPairing?> poll() async {
+    try {
+      final lookup = sha256.convert(_invitation.secret).toString();
+      final value = await _http.request('GET', '/api/v1/pairings/$lookup');
+      if (!_keys(value, {'ciphertext'}) || value['ciphertext'] is! String) throw const RelayException('Relay returned an invalid connection envelope.');
+      return RelayPairing.decode(connectionCode, value['ciphertext']);
+    } on RelayHttpException catch (error) {
+      if (error.status == 404) return null;
+      rethrow;
+    }
+  }
+  void close() => _http.close();
 }
 
 /// Owns all bridges for one HttpClient; never shares the agent TLS context with the broker.

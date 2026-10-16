@@ -2,7 +2,7 @@
 
 ## Goal and scope
 
-Install the Windows agent on a VM without opening an inbound management port or configuring a VPN. The operator configures a self-hosted relay once, creates an installation invitation in the desktop app, installs the agent on the VM, then pastes the VM's connection code into the desktop app. After installation, the agent reconnects outward automatically and continues running independently of the desktop window or an RDP session.
+Install the Windows agent on a VM without opening an inbound management port or configuring a VPN. The operator configures a self-hosted relay once, chooses Add machine with a name/group, then pastes one setup code into the VM installer. The desktop finishes encrypted enrollment automatically, without a second code. The installed agent reconnects outward and runs independently of the desktop window or RDP session.
 
 The relay is a real deployable service, not GitHub Releases, a discovery mock, or a publicly hosted service supplied by this repository. Public hosting, a domain, HTTPS certificates and production publisher-signing credentials are operator prerequisites. Development verification must not be represented as a deployed internet service or signed installer acceptance.
 
@@ -12,12 +12,15 @@ Existing direct HTTPS connections remain supported. Windows remains the implemen
 
 1. Deploy the relay using the supplied container configuration and an HTTPS domain. Keep the bootstrap administration key private.
 2. In the desktop app, configure the relay address and administration key once. These are protected client credentials, not source-code settings.
-3. Choose **Prepare agent installation**. The relay issues a short-lived, one-use installation invitation. Copy it to the VM.
-4. Run the Windows agent installer and approve Windows administrator elevation. Paste the invitation. The explicit unsigned preview forces monitoring-only mode and viewer approval; a publisher-signed production installer permits administration only after affirmative local consent. Setup configures protected code/data, worker and gateway services and the signed-in session helper. The management listener remains loopback-only; the agent makes outbound connections to the relay.
-5. The setup completion page presents a private, expiring connection code. Copy it to **Connect with code** in the desktop app.
-6. The desktop verifies the locally generated agent identity and enrolls a fresh client certificate over the end-to-end encrypted connection. Later requests use the same agent API and permission checks as direct connections.
+3. Choose **Add machine**, enter the name and optional group, then create its private setup code. Copy the public installer link to the VM.
+4. Run the matching Windows agent installer, approve elevation and paste the setup code. Explicit unsigned preview consent forces monitoring-only mode/viewer approval; production administration still requires signed setup and affirmative local consent. Protected services use a loopback-only listener and outward relay connections.
+5. The VM publishes its approved encrypted envelope under the desktop-selected pairing lookup. The waiting desktop authenticates the identity, enrolls a client certificate and probes ordinary mTLS automatically.
+6. Pending intent and issued credentials are recoverable from OS-protected storage. Interrupted one-use issuance is not blindly replayed; advanced manual codes remain available for installed-agent recovery.
 
 Codes are copy/paste invitations, not a promise of a globally resolvable six-digit PIN. A self-contained invitation carries its relay origin and a high-entropy secret, avoiding both manual VM addresses and a relay-controlled identity lookup.
+
+Preview 3's setup fragment contains the existing installation token and an independent desktop-generated pairing key, separated by a dot. Only the first capability is submitted during registration. No new broker endpoint or trusted web bootstrap is required: the VM publishes the existing origin-bound AES-GCM envelope with the second key, and desktop polling sends only its SHA256 identifier. Polling is serialized every three seconds and bounded by the invitation lifetime plus a five-minute completion window.
+
 
 ## Trust boundaries
 
@@ -100,8 +103,11 @@ Inno's post-install event does not roll back a committed runtime when its helper
 
 ## Observed implementation verification
 
-The implementation passed 144 backend and 14 client tests, analyzer checks and native client/frozen agent builds. Real selector sockets reproduced stalled buffered close and verified bounded hard-abort teardown while quotas remained reserved. Real Windows ACL/DPAPI fixtures reproduced gateway ancestor-permission loss and verified the fixed root-only metadata grant without private-file access.
+The implementation passed 187 backend and 25 client tests and analyzer checks; the native Windows debug client built and ran. Earlier packaged-agent verification and real selector sockets covered bounded hard-abort teardown and quota retention. Real Windows ACL/DPAPI fixtures covered gateway root-only metadata access without private-file reads.
 
 The actual broker CLI and bundled worker/gateway were exercised through native desktop invitation creation, encrypted-code enrollment, live mTLS telemetry, view-job completion and duplicate request identity, read-only/viewer denial, SHA256-verified report download, revocation on an unchanged live TLS socket, certificate renewal, broker loss/reconnect without job replay, and desktop process exit/relaunch from protected credentials while resident sampling continued.
+
+The simplified flow was exercised with native name/group entry, actual setup creation, close/reopen recovery, a real broker and Windows worker/gateway, encrypted automatic enrollment, authenticated disk telemetry and contract editing. Real certificate renewal preserved exact expiry/renewal dates and cost. Native two/three-column Backups layouts, sidebar toggling and a narrow pointer-operated drawer were inspected. A deliberately rejected final mTLS probe retained issued credentials across dialog close/reopen; restored connectivity saved the same identity with an unchanged device count. A pinned TLS response stalled beyond 58 seconds before the fix and hit the new 30-second body deadline afterward.
+
 
 These observations used explicit numeric-loopback development transport and protected local fixtures, with a native-verified virtual-service SID but no installed SCM service. They are not public Caddy/HTTPS hosting, constrained-token/reboot proof, signed publisher acceptance or a clean-VM installed setup test. Those external gates remain required before production deployment.

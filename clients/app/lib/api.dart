@@ -35,6 +35,43 @@ class ApiException implements Exception {
   String toString() => '$message${correlation == null ? '' : ' (reference: $correlation)'}';
 }
 
+// Contract dates are local calendar days, never certificate instants or UTC timestamps.
+DateTime? parseCalendarDate(dynamic value) {
+  if (value == null) return null;
+  if (value is! String || !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value)) {
+    throw const FormatException('Use a calendar date in YYYY-MM-DD format.');
+  }
+  final year = int.parse(value.substring(0, 4));
+  final month = int.parse(value.substring(5, 7));
+  final day = int.parse(value.substring(8, 10));
+  final date = DateTime(year, month, day);
+  if (year < 1 || date.year != year || date.month != month || date.day != day) {
+    throw const FormatException('Invalid calendar date.');
+  }
+  return date;
+}
+
+String calendarDate(DateTime date) =>
+  '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+// Parse decimal input as integers; binary floating point must never round billing metadata.
+int? parseCostMinor(String input) {
+  final value = input.trim();
+  if (value.isEmpty) return null;
+  if (!RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(value)) {
+    throw const FormatException('Enter a nonnegative amount with at most two decimal places.');
+  }
+  final parts = value.split('.');
+  final minor = BigInt.parse(parts[0]) * BigInt.from(100) +
+    BigInt.parse(parts.length == 1 ? '0' : parts[1].padRight(2, '0'));
+  if (minor > BigInt.parse('9223372036854775807')) {
+    throw const FormatException('Amount is too large.');
+  }
+  return minor.toInt();
+}
+
+String costDecimal(int minor) => '${minor ~/ 100}.${(minor % 100).toString().padLeft(2, '0')}';
+
 class MachineProfile {
   final String id;
   String name;
@@ -47,16 +84,54 @@ class MachineProfile {
   final String deviceId;
   final String role;
   final RelayRoute? relay;
+  DateTime? expiresOn;
+  DateTime? renewOn;
+  int? costMinor;
+  String currency;
+  String billingPeriod;
   MachineProfile({required this.id, required this.name, required this.group, required this.endpoint,
     required this.certificate, required this.privateKey, required this.ca, required this.fingerprint,
-    required this.deviceId, required this.role, this.relay});
+    required this.deviceId, required this.role, this.relay, this.expiresOn, this.renewOn,
+    this.costMinor, this.currency = 'USD', this.billingPeriod = 'monthly'});
   factory MachineProfile.fromJson(Map<String, dynamic> j) => MachineProfile(id: j['id'], name: j['name'], group: j['group'] ?? '',
     endpoint: j['endpoint'], certificate: j['certificate'], privateKey: j['privateKey'], ca: j['ca'],
     fingerprint: j['fingerprint'], deviceId: j['deviceId'], role: j['role'] ?? 'unknown',
-    relay: j['relay'] == null ? null : RelayRoute.fromJson(Map<String, dynamic>.from(j['relay'])));
+    relay: j['relay'] == null ? null : RelayRoute.fromJson(Map<String, dynamic>.from(j['relay'])),
+    expiresOn: parseCalendarDate(j['expiresOn']), renewOn: parseCalendarDate(j['renewOn']),
+    costMinor: _storedCost(j['costMinor']), currency: _storedCurrency(j['currency']),
+    billingPeriod: _storedPeriod(j['billingPeriod']));
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'group': group, 'endpoint': endpoint,
     'certificate': certificate, 'privateKey': privateKey, 'ca': ca, 'fingerprint': fingerprint, 'deviceId': deviceId, 'role': role,
-    if (relay != null) 'relay': relay!.toJson()};
+    if (relay != null) 'relay': relay!.toJson(),
+    if (expiresOn != null) 'expiresOn': calendarDate(expiresOn!),
+    if (renewOn != null) 'renewOn': calendarDate(renewOn!),
+    if (costMinor != null) 'costMinor': costMinor,
+    'currency': currency, 'billingPeriod': billingPeriod};
+
+  MachineProfile withCredentials({required String certificate, required String privateKey,
+    required String ca, required String deviceId, required String role}) =>
+    MachineProfile(id: id, name: name, group: group, endpoint: endpoint,
+      certificate: certificate, privateKey: privateKey, ca: ca, fingerprint: fingerprint,
+      deviceId: deviceId, role: role, relay: relay, expiresOn: expiresOn, renewOn: renewOn,
+      costMinor: costMinor, currency: currency, billingPeriod: billingPeriod);
+
+  static int? _storedCost(dynamic value) {
+    if (value == null) return null;
+    if (value is! int || value < 0) throw const FormatException('Invalid stored cost.');
+    return value;
+  }
+  static String _storedCurrency(dynamic value) {
+    if (value == null) return 'USD';
+    if (value is! String || !RegExp(r'^[A-Z]{3}$').hasMatch(value)) {
+      throw const FormatException('Invalid stored currency.');
+    }
+    return value;
+  }
+  static String _storedPeriod(dynamic value) {
+    if (value == null) return 'monthly';
+    if (!['monthly', 'yearly', 'one-time'].contains(value)) throw const FormatException('Invalid stored billing period.');
+    return value as String;
+  }
 }
 
 class ProfileVault {
@@ -79,7 +154,12 @@ class ProfileVault {
     await storage.write(key: 'rdpmonitor.profiles.$slot', value: data);
     if (await storage.read(key: 'rdpmonitor.profiles.$slot') != data) throw ApiException('Secure profile write could not be verified.');
     await storage.write(key: 'rdpmonitor.profile-slot', value: slot);
-    if (oldSlot != null) await storage.delete(key: 'rdpmonitor.profiles.$oldSlot');
+    if (oldSlot != null) {
+      // The pointer write is the commit. Cleanup must not report a failed save
+      // after committing, which would make callers roll back only in memory.
+      // A retained previous generation stays in the OS vault and is overwritten next save.
+      try { await storage.delete(key: 'rdpmonitor.profiles.$oldSlot'); } catch (_) { /* committed */ }
+    }
   }
 }
 
@@ -185,10 +265,9 @@ class AgentApi {
     final identity = await compute(createIdentity, profile.deviceId);
     final result = await call('POST', '/devices/renew', body: {'csr': identity['csr']});
     final device = object(result['device']);
-    return MachineProfile(id: profile.id, name: profile.name, group: profile.group, endpoint: profile.endpoint,
-      certificate: result['certificate'], privateKey: identity['key']!,
-      ca: result['ca_certificate'] ?? profile.ca, fingerprint: profile.fingerprint,
-      deviceId: device['id'] ?? profile.deviceId, role: device['role'] ?? profile.role, relay: profile.relay);
+    return profile.withCredentials(certificate: result['certificate'], privateKey: identity['key']!,
+      ca: result['ca_certificate'] ?? profile.ca,
+      deviceId: device['id'] ?? profile.deviceId, role: device['role'] ?? profile.role);
   }
 
   static Future<MachineProfile> enroll({required String endpoint, required String fingerprint, required String code,
@@ -196,16 +275,19 @@ class AgentApi {
       _enroll(endpoint: endpoint, fingerprint: fingerprint, code: code, name: name, group: group, deviceName: deviceName);
 
   static Future<MachineProfile> enrollRelay({required String connectionCode, required String name,
-    required String group, required String deviceName}) async {
+    required String group, required String deviceName, Future<void> Function(MachineProfile)? onIssued,
+    Future<void> Function()? onEnrolling}) async {
     final pairing = await RelayPairing.lookup(connectionCode);
     return _enroll(endpoint: pairing.endpoint, fingerprint: pairing.fingerprint, code: pairing.pairingCode,
       name: name.trim().isEmpty ? pairing.name : name, group: group, deviceName: deviceName,
-      relay: pairing.route, expectedAgentId: pairing.agentId, expires: pairing.expires);
+      relay: pairing.route, expectedAgentId: pairing.agentId, expires: pairing.expires,
+      onIssued: onIssued, onEnrolling: onEnrolling);
   }
 
   static Future<MachineProfile> _enroll({required String endpoint, required String fingerprint, required String code,
     required String name, required String group, required String deviceName, RelayRoute? relay,
-    String? expectedAgentId, DateTime? expires}) async {
+    String? expectedAgentId, DateTime? expires, Future<void> Function(MachineProfile)? onIssued,
+    Future<void> Function()? onEnrolling}) async {
     final origin = serverUri(endpoint);
     final pin = normalizedPin(fingerprint);
     if (pin.length != 64) throw ApiException('Enter the complete 64-digit SHA256 server fingerprint shown on the agent.');
@@ -224,7 +306,13 @@ class AgentApi {
       final response = await request.close().timeout(const Duration(seconds: 30));
       final certificate = response.certificate;
       if (certificate == null || sha256.convert(certificate.der).toString() != pin) throw ApiException('Server fingerprint mismatch.');
-      final value = object(jsonDecode(await utf8.decoder.bind(response).join()));
+      final bytes = await response.fold<List<int>>([], (buffer, chunk) {
+        if (buffer.length + chunk.length > 128 * 1024) {
+          throw ApiException('Enrollment response exceeds the client safety limit.');
+        }
+        buffer.addAll(chunk); return buffer;
+      }).timeout(const Duration(seconds: 30));
+      final value = object(jsonDecode(utf8.decode(bytes)));
       if (response.statusCode < 200 || response.statusCode >= 300) throw ApiException(object(value['error'])['message']?.toString() ?? 'Enrollment failed.', status: response.statusCode);
       return value;
     }
@@ -233,6 +321,7 @@ class AgentApi {
       if (expectedAgentId != null && health['agent_id'] != expectedAgentId) throw ApiException('Connection code agent identity mismatch.');
       final identity = await compute(createIdentity, deviceName.trim());
       if (expires != null && !DateTime.now().isBefore(expires)) throw ApiException('Connection code expired before enrollment. Generate a new code on the agent.');
+      if (onEnrolling != null) await onEnrolling();
       final result = await pinned('POST', '/enroll', {'code': code.trim(), 'name': deviceName.trim(), 'csr': identity['csr']!});
       if (expectedAgentId != null && result['agent_id'] != expectedAgentId) throw ApiException('Enrolled agent identity mismatch.');
       final device = object(result['device']);
@@ -243,7 +332,11 @@ class AgentApi {
       X509Utils.x509CertificateFromPem(profile.certificate);
       X509Utils.x509CertificateFromPem(profile.ca);
       final probe = AgentApi(profile);
-      try { await probe.call('GET', '/health'); } finally { probe.close(); }
+      try {
+        // Keep the issued identity recoverable before the one-use enrollment's final probe.
+        if (onIssued != null) await onIssued(profile);
+        await probe.call('GET', '/health');
+      } finally { probe.close(); }
       return profile;
     } finally { transport?.close(); client.close(force: true); }
   }

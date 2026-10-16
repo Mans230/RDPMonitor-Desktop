@@ -71,3 +71,14 @@ that architectural limitation is documented rather than hidden.
 - Reorganized client navigation: Diagnostics moved under Observe and Imaging moved under
   Manage, with the grouping rationale documented in code.
 - Added network-watch and hardening regression tests to `tests/`.
+
+## Desktop Preview 3 — one-code fleet workspace
+
+- Add machine now asks for name/group and supplies one VM setup code plus the public installer link. Local VM approval triggers automatic encrypted enrollment; no second code is copied back.
+- Independent installation/pairing capabilities preserve the broker trust boundary. Pending setup and issued identities are checkpointed in OS-protected storage; ambiguous issuance is never silently replayed.
+- Advanced recovery retains an issued identity before the final mTLS probe, including across dialog close/reopen. Pinned response bodies have a 128 KiB limit and 30-second deadline.
+- Machines gained grouped disk-space tables and optional contract expiry, renewal, currency/cost and billing-period metadata. Exact integer hundredths avoid monetary rounding; certificate rotation preserves contract fields.
+- Added dedicated Backups, Recovery, Processes and Services destinations, related command groups, responsive natural-height one/two/three-column cards and wide-sidebar hide/show with narrow drawer navigation.
+- Fleet mutations reject unreadable/unloaded vault state; post-commit cleanup cannot falsely roll back saved metadata. Nested JSON inspectors no longer share expansion booleans with selectable-text scroll offsets.
+- Retained merged PR #1 network monitoring/hardening and PR #2 bounded relay lookup/WebSocket Origin checks. Missing reachability measurements are labeled honestly.
+- Verification: 187 backend tests and 25 client tests passed, analyzer clean, actual native automatic enrollment and failed-probe/no-replay recovery exercised. Installed SCM/reboot/signing/public relay acceptance remains external.

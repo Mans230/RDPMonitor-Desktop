@@ -203,8 +203,12 @@ def register_installation(invitation: str, data_dir: Path, *, allow_loopback: bo
 
 
 def publish_connection_code(data_dir: Path, *, role: str = "owner", ttl: int = 300,
-                            pipe_name: str = DEFAULT_PIPE, allow_loopback: bool = False) -> dict:
+                            pipe_name: str = DEFAULT_PIPE, allow_loopback: bool = False,
+                            secret: bytes | None = None) -> dict:
     _require_local_admin()
+    # Validate a desktop-supplied key before requesting any local approval/grant.
+    if secret is not None and (not isinstance(secret, bytes) or len(secret) != 32):
+        raise OperationError("pairing_parameters", "The setup pairing key must contain 256 bits.", 400)
     if (type(ttl) is not int or not 30 <= ttl <= MAX_PAIRING_TTL
             or not isinstance(role, str) or role not in {"owner", "operator", "viewer"}):
         raise OperationError("pairing_parameters", "Choose owner, operator, or viewer and a lifetime between 30 and 600 seconds.", 400)
@@ -235,7 +239,7 @@ def publish_connection_code(data_dir: Path, *, role: str = "owner", ttl: int = 3
         canonical_id(grant["grant_id"])
         decode_secret(grant["route_token"])
         payload["route_token"] = grant["route_token"]
-        envelope = create_pairing_envelope(settings.relay_origin, payload, allow_loopback=allow_loopback)
+        envelope = create_pairing_envelope(settings.relay_origin, payload, allow_loopback=allow_loopback, secret=secret)
         result = _request(settings.relay_origin, f"/api/v1/agents/{settings.route_id}/pairings",
                           {key: envelope[key] for key in ("lookup_id", "ciphertext", "expires")},
                           token=settings.agent_token)

@@ -254,6 +254,29 @@ def _ready(deployment: dict) -> None:
             time.sleep(1)
 
 
+def _installation_input(path: Path) -> tuple[str | None, bytes | None]:
+    """Read the wizard's protected exchange, never an argv or network setup URI."""
+    from relay.protocol import parse_invitation, parse_setup_invitation
+    from .relay import relay_settings_path
+    invitation_file = path / 'invitation.txt'
+    if relay_settings_path(data_directory()).exists():
+        if invitation_file.exists():
+            raise ValueError('Already registered; use the explicit pair-installed flow')
+        return None, None
+    try:
+        verify_protected_tree(invitation_file, recursive=False)
+        if invitation_file.stat().st_size > 8192:
+            raise ValueError('Invitation exceeds limit')
+        invitation = invitation_file.read_text(encoding='utf-8-sig').strip()
+        if invitation.startswith('rdpmonitor://setup?'):
+            setup = parse_setup_invitation(invitation)
+            return setup.installation_code, setup.pairing_secret
+        parse_invitation(invitation, kind='install')
+        return invitation, None
+    finally:
+        invitation_file.unlink(missing_ok=True)
+
+
 def pair(session: str) -> None:
     path = _session(session)
     deployment = _deployment()
@@ -262,14 +285,29 @@ def pair(session: str) -> None:
     verify_protected_tree(Path(deployment['release']))
     _ready(deployment)
     from .relay import publish_connection_code
-    result = publish_connection_code(data_directory(), role='viewer' if deployment.get('read_only') else 'owner', ttl=300)
+    from relay.protocol import decode_secret
+    key_file = path / 'pairing-key.txt'
+    secret = None
+    if key_file.exists():
+        verify_protected_tree(key_file, recursive=False)
+        if key_file.stat().st_size != 43:
+            raise ValueError('Invalid protected pairing key')
+        secret = decode_secret(key_file.read_text(encoding='ascii'))
+    result = publish_connection_code(data_directory(), role='viewer' if deployment.get('read_only') else 'owner',
+                                     ttl=300, secret=secret)
     _write(path / 'connection.txt', result['code'])
     _write(path / 'expires.txt', str(result['expires']))
-    _write(path / 'status.txt', 'Connection code published. Private; expires after five minutes. Enrollment is single-use.')
+    _write(path / 'automatic.txt', '1' if secret is not None else '0')
+    _write(path / 'status.txt', 'Ready for automatic desktop enrollment. Return to Add machine on your desktop; no second code is needed.'
+           if secret is not None else 'Connection code published. Private; expires after five minutes. Enrollment is single-use.')
+    # Broker lookups are immutable. A later explicit refresh is a new manual
+    # recovery code, never an attempt to overwrite the desktop's setup envelope.
+    key_file.unlink(missing_ok=True)
 
 
 def install(args) -> None:
     path = _session(args.session)
+    invitation, pairing_secret = _installation_input(path)
     package = args.package.absolute()
     if package.parent != install_directory() / 'releases':
         raise ValueError('Payload must be installed in the protected versioned Program Files directory')
@@ -298,17 +336,12 @@ def install(args) -> None:
             shutil.copyfile(package / 'publisher.cer', pinned)
             protect_path(pinned)
     register_services(package / 'agent' / 'RDPMonitorAgent.exe')
-    from .relay import relay_settings_path, register_installation
-    invitation_file = path / 'invitation.txt'
-    try:
-        if not relay_settings_path(data_directory()).exists():
-            verify_protected_tree(invitation_file, recursive=False)
-            if invitation_file.stat().st_size > 8192:
-                raise ValueError('Invitation exceeds limit')
-            invitation = invitation_file.read_text(encoding='utf-8-sig').strip()
-            register_installation(invitation, data_directory())
-    finally:
-        invitation_file.unlink(missing_ok=True)
+    from .relay import register_installation
+    if invitation is not None:
+        register_installation(invitation, data_directory())
+        if pairing_secret is not None:
+            from relay.protocol import encode_secret
+            _write(path / 'pairing-key.txt', encode_secret(pairing_secret))
     _entrypoint(package)
     _service_action('start')
     _ready(deployment)

@@ -26,7 +26,7 @@ MonitorTone _tone(dynamic value) => switch (value?.toString().toLowerCase()) {
 String networkStateLabel(dynamic state) => switch (state?.toString()) {
   'up' => 'Network reachable',
   'down' => 'Network unreachable',
-  _ => 'Checking reachability',
+  _ => 'Reachability not measured',
 };
 MonitorTone networkStateTone(dynamic state) => switch (state?.toString()) {
   'up' => MonitorTone.success,
@@ -61,7 +61,8 @@ class DataTree extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     if (data is Map || data is List) {
       return ExpansionTile(
-        key: PageStorageKey('data-$key'),
+        // Descendant selectable text must not read expansion booleans as scroll offsets.
+        key: ValueKey('data-$key'),
         tilePadding: const EdgeInsets.symmetric(horizontal: 12),
         title: Text(label(key), style: Theme.of(context).textTheme.titleSmall),
         subtitle: Text(data is List ? '${data.length} records' : '${(data as Map).length} fields', style: Theme.of(context).textTheme.bodySmall),

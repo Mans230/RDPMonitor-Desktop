@@ -78,22 +78,36 @@ For non-container deployments, install `relay/requirements.txt`, set private `RD
 ### Operator desktop and VM setup
 
 1. Run the native desktop as the operator. Open **Relay settings**, enter the HTTPS origin and administration key, and choose **Save & load routes**. Both settings are held in OS-protected storage.
-2. Choose **Prepare agent installation**. Its one-use installation invitation is valid for 15 minutes. Copy it privately to the intended VM.
-3. Download the matching Windows setup from this project's releases, verify its label/publisher instructions, run it on the VM and approve administrator elevation. Paste the installation invitation. Release installers require valid HTTPS; arbitrary certificate bypass and remote HTTP are not available.
-4. Monitoring-only is selected by default. The unsigned preview forces it and issues a viewer device approval. A correctly signed production setup can enable administration only after explicit local consent.
-5. Copy the real five-minute connection code from the setup completion page into **Connect with code** on the desktop. The app decrypts identity/routing metadata locally, pins the agent before sending the one-use enrollment secret, then uses ordinary CA/hostname/mTLS validation for telemetry and operations.
+2. Choose **Add machine**, enter its name and optional group, then **Create setup code**. A single pending installation is retained in OS-protected storage; close/reopen Add machine to resume it.
+3. Choose **Copy installer link** and download the matching Preview 3 setup on the Windows VM. Run it, approve administrator elevation and the unsigned-preview notice, then paste the private setup code. Preview 2 installers do not understand the new setup-code format. Release installers require valid HTTPS; no remote HTTP or certificate bypass is available.
+4. Monitoring-only is selected by default. The unsigned preview forces it and a viewer approval; signed production setup can enable administration only after explicit local consent.
+5. The desktop polls for the encrypted VM approval, verifies its pinned identity, enrolls and probes ordinary mTLS automatically. **Do not copy another code back.** The setup completion page retains a manual recovery option for advanced use.
 
 The VM gateway binds `127.0.0.1:8443`; the constrained gateway connects outward using HTTPS/WSS. Neither a public VM address, management port forwarding nor a VPN is required. Existing Windows/RDP firewall protection is not relaxed. Each Windows VM needs its own installation and persistent identity; copying DPAPI state to another VM is not enrollment. Linux agents and hypervisor provisioning/power-on are not implemented.
 
-Keep connection codes and installation invitations private. They are distinct copy/paste URIs, not globally resolvable six-digit PINs or browser links. The connection secret stays in the fragment; lookup uses only its SHA256 identifier. The relay cannot decrypt or replace the AES-GCM envelope or authorize Windows requests. It can observe routing metadata and deny availability.
+Keep setup and manual connection codes private; they are copy/paste URIs, not browser links or globally resolvable six-digit PINs. A setup URI carries two independent canonical 256-bit capabilities in its fragment: the one-use relay installation token and a desktop-generated pairing key. The VM sends only the installation token during registration, then publishes the existing AES-GCM envelope using the independent key. Desktop lookup sends only SHA256(key); the broker cannot decrypt/replace the identity or authorize Windows operations. The separate installer download link contains no capability and can be opened normally in a browser.
 
 Reopen the same installer and choose **Pair installed agent** to generate a new connection code; no consumed installation invitation is reused. **Repair the same release** preserves the machine identity, enrolled devices, routing, data and deployment mode. Version/trust changes use the signed update lifecycle, not an unsigned repair path. A failed post-install helper displays recovery instructions and setup exit code `42`, rather than claiming a completed connection; the protected runtime remains available for repair.
+
+Normal installation invitations last 15 minutes. Waiting is serialized at three-second intervals and stops after the installation window plus at most five minutes for a VM that already registered. Closing the waiting dialog keeps its intent/key in protected storage; discard explicitly removes only that local pending state, not a remote invitation, route or certificate. Enrollment is not silently replayed after an ambiguous one-use POST. Once a device identity is received, both normal setup and advanced recovery checkpoint it before the final mTLS probe; retry verifies/saves that identity instead of issuing another certificate. Enrollment response bodies are bounded to 128 KiB and a 30-second read deadline.
+
+Use a fresh disposable VM for this unsigned evaluation payload. **Repair means the same published release**, not an unsigned cross-preview/version upgrade or trust migration. Existing installed agents can still generate a fresh manual code through Pair installed agent.
+
 
 The private exchange directory is `%ProgramData%\RDPMonitor\setup\<random-session>`. It is protected before any invitation/result is written, and cleaned when setup exits. No invitation, connection code or routing token is placed in process arguments. Worker state remains SYSTEM/Administrators-only; the gateway receives noninheriting root descriptor/traverse rights plus read access to its own TLS/routing inputs, not the worker database or CA key.
 
 Use **Devices & access** to revoke a lost Windows device certificate. **Relay settings → Revoke route** instead permanently disconnects that installation's transport credentials/grants; it does not uninstall the agent or revoke its Windows device certificates. Identity tombstones prevent takeover/re-registration of that same agent ID. Do not revoke a route as a temporary pause. There is no automatic identity reset or cross-relay migration.
 
 The default single-broker bounds are 256 retained agent identities (including revocation tombstones), 128 live installation invitations, 32 grants and 32 unexpired envelopes per route, 16 streams per route and 256 total streams. Pending grants expire after ten minutes; the first admitted connection activates a grant until revocation. Pairing envelopes expire independently. Closing sockets remain in quota accounting until actual transport teardown; stalled output is forcibly aborted after two seconds. Expired records are cleaned without replaying application requests.
+
+### Machine inventory and command layout
+
+The Machines table groups profiles and supports name/group search, connection-state filters, expiry-due and renewal-due filters. Disk values come from authenticated agent snapshots; retained measurements are labeled stale, and missing values are not replaced by zero. Hover the disk cell for all reported volumes and the measurement time. Scroll each table horizontally when the sidebar or window leaves insufficient room.
+
+**Edit profile and contract** controls the display name/group, optional contract expiry/renewal dates, cost estimate, three-letter currency and monthly/yearly/one-time period. Decimal input is stored as integer hundredths, not floating point. The date-only action edits billing reminders, not device credentials. Metadata remains local in OS-protected storage and survives certificate renewal. Direct HTTPS address editing is under Connection; relay identities remain read-only. Unloaded/unreadable secure profiles cannot be overwritten by fleet mutations.
+
+Backups and Recovery are separate navigation destinations, as are Processes and Services. Commands are grouped by related task, searchable and still governed by agent capabilities/confirmation. Card columns use actual available logical content width (including text scaling), not just monitor width. The wide sidebar can be hidden/reopened; below the desktop breakpoint the same destinations live in a scrollable drawer.
+
 
 ### Local relay development
 
