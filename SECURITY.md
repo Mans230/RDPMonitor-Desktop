@@ -23,6 +23,17 @@ The client stores profiles and device credentials in `flutter_secure_storage` us
 
 Keep independent, encrypted off-host recovery material. Windows DPAPI is not portable recovery: legacy migration must run as the original Windows account when its user-scoped secrets need decryption. Do not copy encrypted state to another host/account and assume it will work. Rollback restores identities and revocations as well as other snapshot state; review subsequent administrative changes and device access afterward.
 
+## Network reachability monitoring
+
+The worker probes the configured reachability target (`ping_target`, default `1.1.1.1`) over TCP about once a minute while `net_watch` is enabled. After the failure debounce it records a durable `network.down` event, and a matching `network.up` event with the outage duration when connectivity returns. Those events feed the client inbox and any configured push provider; they are the record to inspect when a machine was isolated. The probe is outbound only: it opens no listening port, uploads nothing off-host and runs no command. Set `net_watch` to false in monitor settings to disable it. A powered-off machine cannot report its own outage, so reliable machine-down alerting still needs an external observer.
+
+## Recent hardening
+
+- Monitor configuration is fail-closed: a field whose name reads as credential material is excluded from the readable and writable configuration surface, even when it is newly introduced, so a future secret cannot silently become exportable or settable.
+- The job transport, durable events and audit records now share a single secret-name definition instead of three lists that could drift.
+- The update-availability comparison uses SHA-256 rather than MD5.
+- Backup pre/post hooks run with the worker identity. They can be disabled with the `hooks_enabled` backup setting, a command containing a NUL byte is refused rather than executed, and each run is logged by SHA-256 fingerprint instead of the command text, which may embed credentials.
+
 ## Unsigned prerelease and outstanding gates
 
 The Windows x64 unsigned ZIP is an evaluation prerelease, not an authenticated production installer. Do not bypass production signature checks to install it. Publisher signing and a signed coherent release manifest are required for production distribution.

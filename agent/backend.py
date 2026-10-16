@@ -22,7 +22,7 @@ import zipfile
 
 import psutil
 
-from .contracts import OperationError
+from .contracts import OperationError, secret_named
 from .security import ROLE_CAPABILITIES
 
 
@@ -690,7 +690,11 @@ class WindowsBackend:
 
     def _editable_defaults(self):
         excluded = {"telegram_token", "telegram_token_enc", "chat_id", "trusted_chat_ids", "trusted_user_ids", "send_backup_file", "backup_file_max_mb", "rdp_port", "rdp_allow_active", "rdp_allow_pre_active", "rdpallow_disabled_rules", "pre_default_inbound", "muted_until", "learned_ips", "lockdown_until", "panic_active", "rdpsched_blocked", "update_url", "update_hash"}
-        return {k: copy.deepcopy(v) for k, v in self.monitor.DEFAULT_CONFIG.items() if k not in excluded}
+        # Fail closed: never expose a field whose name reads as credential material,
+        # even if it was only just added to DEFAULT_CONFIG. The explicit set above
+        # covers non-secret operational keys that must stay local as well.
+        return {k: copy.deepcopy(v) for k, v in self.monitor.DEFAULT_CONFIG.items()
+                if k not in excluded and not secret_named(k)}
 
     def get_config(self, domain):
         if domain == "backup":

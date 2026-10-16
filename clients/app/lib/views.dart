@@ -23,6 +23,22 @@ MonitorTone _tone(dynamic value) => switch (value?.toString().toLowerCase()) {
   _ => MonitorTone.neutral,
 };
 
+String networkStateLabel(dynamic state) => switch (state?.toString()) {
+  'up' => 'Network reachable',
+  'down' => 'Network unreachable',
+  _ => 'Checking reachability',
+};
+MonitorTone networkStateTone(dynamic state) => switch (state?.toString()) {
+  'up' => MonitorTone.success,
+  'down' => MonitorTone.danger,
+  _ => MonitorTone.neutral,
+};
+IconData networkStateIcon(dynamic state) => switch (state?.toString()) {
+  'up' => Icons.cloud_done_outlined,
+  'down' => Icons.cloud_off_outlined,
+  _ => Icons.sync_outlined,
+};
+
 class DataTree extends StatelessWidget {
   final dynamic value;
   final String? name;
@@ -85,6 +101,7 @@ class _OverviewState extends State<Overview> {
     final machine = widget.machine;
     final snapshot = machine.snapshot;
     final cpu = object(snapshot['cpu']), ram = object(snapshot['ram']);
+    final reach = object(snapshot['network']);
     final theme = Theme.of(context);
     final valid = machine.history.where((row) => instant(row['ts']) != null).toList()
       ..sort((a, b) => instant(a['ts'])!.compareTo(instant(b['ts'])!));
@@ -157,7 +174,22 @@ class _OverviewState extends State<Overview> {
         : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 7, child: resources), const SizedBox(width: 18), Expanded(flex: 4, child: facts)])),
       const SizedBox(height: 18),
       MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const SectionHeader(title: 'Network', subtitle: 'Transfer rates and interface state'),
+        SectionHeader(
+          title: 'Network',
+          subtitle: 'Reachability, transfer rates and interface state',
+          action: reach.isEmpty ? null : StatusPill(label: networkStateLabel(reach['state']), tone: networkStateTone(reach['state']), icon: networkStateIcon(reach['state'])),
+        ),
+        const SizedBox(height: 16),
+        if (reach.isEmpty)
+          const Text('Reachability monitoring has not reported yet. The agent probes the configured target about once a minute while net_watch is enabled.')
+        else
+          DataTree(value: {
+            'target': reach['target'],
+            'last_checked': timestamp(reach['checked_at']),
+            'state_since': timestamp(reach['since']),
+            if (reach['state'] == 'down') 'outage_started': timestamp(reach['down_since']),
+            if (reach['state'] == 'up' && (reach['seconds_down'] is num) && (reach['seconds_down'] as num) > 0) 'last_outage_seconds': reach['seconds_down'],
+          }),
         const SizedBox(height: 18),
         Wrap(spacing: 38, runSpacing: 16, children: [
           _networkValue(context, 'Receive', snapshot['down_bps'], Icons.south_outlined),
