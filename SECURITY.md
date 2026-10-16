@@ -29,7 +29,7 @@ Keep independent, encrypted off-host recovery material. Windows DPAPI is not por
 
 ## Network reachability monitoring
 
-The worker probes the configured reachability target (`ping_target`, default `1.1.1.1`) over TCP about once a minute while `net_watch` is enabled. After the failure debounce it records a durable `network.down` event, and a matching `network.up` event with the outage duration when connectivity returns. Those events feed the client inbox and any configured push provider; they are the record to inspect when a machine was isolated. The probe is outbound only: it opens no listening port, uploads nothing off-host and runs no command. Set `net_watch` to false in monitor settings to disable it. A powered-off machine cannot report its own outage, so reliable machine-down alerting still needs an external observer.
+The worker probes the configured reachability target (`ping_target`, default `1.1.1.1`) over TCP about once a minute while `net_watch` is enabled. After the failure debounce it records a durable `network.down` event, and a matching `network.up` event with the outage duration when connectivity returns. Those events feed the client inbox and any configured push provider; they are the record to inspect when a machine was isolated. The probe is outbound only: it opens no listening port, uploads nothing off-host and runs no command. Set `net_watch` to false in monitor settings to disable it, or use the reachability switch in the Overview network panel, which rewrites only `net_watch` against the current revision. A powered-off machine cannot report its own outage, so reliable machine-down alerting still needs an external observer.
 
 ## Recent hardening
 

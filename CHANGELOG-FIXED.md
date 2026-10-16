@@ -56,6 +56,10 @@ that architectural limitation is documented rather than hidden.
   `snapshot` and `health`.
 - The client now shows reachability: a status pill in the machine bar and a reachability
   block in the Overview network panel.
+- The Overview network panel gained a one-click reachability switch. It reads and rewrites
+  only `net_watch` against the current configuration revision, so it can never clobber
+  unrelated monitor settings; the full editor in Settings still exposes the same key with
+  its surrounding context.
 - Monitor configuration is fail-closed. Any editable field whose name reads as credential
   material is excluded from the readable and writable configuration surface, so a newly
   introduced secret cannot silently become exportable or settable.
