@@ -26,7 +26,7 @@ function Set-ProtectedDirectory([string]$Path, [switch]$Code) {
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')), 'ReadAndExecute', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
     } else {
         # Traverse/read the root descriptor only; no inherited access to worker state.
-        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($GatewaySid)), 'ReadAndExecute', 'None', 'None', 'Allow')))
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($GatewaySid)), [Security.AccessControl.FileSystemRights]0x000200A0, 'None', 'None', 'Allow')))
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
     Invoke-Checked 'icacls.exe' @($Path,'/setowner','*S-1-5-32-544','/T','/C')

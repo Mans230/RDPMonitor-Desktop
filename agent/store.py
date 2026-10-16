@@ -20,7 +20,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from .certificates import (agent_identity, protect_path, protect_secret,
-                           protected_directory, reject_links, timestamp, unprotect_secret, utcnow)
+                           protected_directory, protected_data_directory, reject_links, timestamp, unprotect_secret, utcnow)
 from .contracts import OperationError, SECRET_ENVELOPE_WORDS, TERMINAL_STATES, secret_named
 
 MAX_JSON_BYTES = 4 * 1024 * 1024
@@ -121,7 +121,7 @@ class Store:
     ARTIFACT_TTL_SECONDS = 24 * 3600
 
     def __init__(self, data_dir: Path):
-        self.data_dir = protected_directory(data_dir)
+        self.data_dir = protected_data_directory(data_dir)
         self.artifacts_dir = protected_directory(self.data_dir / "artifacts")
         self.path = self.data_dir / "state.sqlite3"
         self._closed = False

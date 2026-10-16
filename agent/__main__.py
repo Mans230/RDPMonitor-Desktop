@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -69,7 +70,7 @@ def run_worker(root: Path, data_dir: Path, stop_event: threading.Event,
         runtime.stop()
 
 
-def _run_https(proxy, paths, host, port, stop_event):
+def _run_https(proxy, paths, host, port, stop_event, on_started=None):
     import uvicorn
     from .api import CertificateH11Protocol, create_app
 
@@ -79,6 +80,8 @@ def _run_https(proxy, paths, host, port, stop_event):
             if self.started:
                 display_host = f"[{host}]" if ":" in host else host
                 print(f"RDPMonitor agent listening https://{display_host}:{port}", flush=True)
+                if on_started is not None:
+                    on_started()
 
     config = uvicorn.Config(create_app(proxy), host=host, port=port,
         http=CertificateH11Protocol, ws="none", ssl_keyfile=paths["key_path"],
@@ -105,9 +108,45 @@ def _run_https(proxy, paths, host, port, stop_event):
         finished.set()
         watcher.join(timeout=1)
 
+def _serve_transport(proxy, paths, data_dir, host, port, stop_event, *, allow_loopback_relay=False):
+    """Own HTTPS and the optional outbound connector as one gateway lifetime."""
+    from .relay import relay_settings_path, run_connector
+    if not os.path.lexists(relay_settings_path(data_dir)):
+        _run_https(proxy, paths, host, port, stop_event)
+        return
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        raise OperationError("relay_listener", "Relay mode requires a numeric loopback HTTPS listener.")
+    errors = []
+
+    def connect():
+        try:
+            run_connector(data_dir, host, port, stop_event, allow_loopback=allow_loopback_relay)
+            if not stop_event.is_set():
+                raise RuntimeError("Relay connector stopped unexpectedly")
+        except Exception as exc:
+            errors.append(type(exc).__name__)
+            stop_event.set()
+
+    connector = threading.Thread(target=connect, name="rdpmonitor-relay", daemon=True)
+    try:
+        _run_https(proxy, paths, host, port, stop_event, on_started=connector.start)
+    finally:
+        stop_event.set()
+        if connector.ident is not None:
+            connector.join(timeout=20)
+        if connector.is_alive():
+            raise OperationError("relay_shutdown", "Outbound relay connector did not stop within its deadline.", 503)
+    if errors:
+        raise OperationError("relay_connector", f"Outbound relay connector failed ({errors[0]}); check protected relay settings.", 503)
+
+
 
 def run_gateway(root: Path, data_dir: Path, host: str, port: int,
-                stop_event: threading.Event, pipe_name=DEFAULT_PIPE):
+                stop_event: threading.Event, pipe_name=DEFAULT_PIPE, *, allow_loopback_relay=False):
     proxy = WorkerProxy(pipe_name)
     deadline = time.monotonic() + 30
     while True:
@@ -119,10 +158,11 @@ def run_gateway(root: Path, data_dir: Path, host: str, port: int,
                 raise
             if stop_event.wait(0.5):
                 return
-    _run_https(proxy, paths, host, port, stop_event)
+    _serve_transport(proxy, paths, data_dir, host, port, stop_event,
+                     allow_loopback_relay=allow_loopback_relay)
 
 
-def run_serve(root, data_dir, host, port, stop_event, read_only=False):
+def run_serve(root, data_dir, host, port, stop_event, read_only=False, *, allow_loopback_relay=False):
     from .runtime import AgentRuntime
     root, data_dir = _paths(root, data_dir)
     runtime = AgentRuntime(root, data_dir, read_only=read_only)
@@ -130,7 +170,8 @@ def run_serve(root, data_dir, host, port, stop_event, read_only=False):
         runtime.start()
         identity = runtime.ca.ensure()
         print("RDPMonitor TLS SHA256 " + identity["fingerprint"], flush=True)
-        _run_https(IntegratedProxy(runtime), identity, host, port, stop_event)
+        _serve_transport(IntegratedProxy(runtime), identity, data_dir, host, port, stop_event,
+                         allow_loopback_relay=allow_loopback_relay)
     finally:
         runtime.stop()
 
@@ -158,6 +199,10 @@ def _gateway_status(proxy, host, port):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "setup":
+        from .setup import main as setup
+        return setup(argv[1:])
     parser = argparse.ArgumentParser(prog="rdpmonitor-agent", description="RDPMonitor Windows agent")
     subparsers = parser.add_subparsers(dest="mode", required=True)
     default_root = Path(__file__).resolve().parent.parent
@@ -170,6 +215,9 @@ def main(argv=None):
         if mode in ("gateway", "serve", "status"):
             command.add_argument("--host", default="127.0.0.1")
             command.add_argument("--port", type=int, default=8443)
+        if mode in ("gateway", "serve"):
+            command.add_argument("--allow-loopback-relay", action="store_true",
+                                 help="Development only: allow relay HTTP on a numeric loopback IP; never skip TLS checks")
         if mode in ("worker", "serve"):
             command.add_argument("--read-only", action="store_true",
                                  help="Collect real telemetry; disable mutations, protection and schedules")
@@ -194,11 +242,13 @@ def main(argv=None):
         elif args.mode == "gateway":
             if not 1 <= args.port <= 65535:
                 raise OperationError("port", "Port must be between 1 and 65535.")
-            run_gateway(args.root, args.data_dir, args.host, args.port, stop_event, args.pipe_name)
+            run_gateway(args.root, args.data_dir, args.host, args.port, stop_event, args.pipe_name,
+                        allow_loopback_relay=args.allow_loopback_relay)
         elif args.mode == "serve":
             if not 1 <= args.port <= 65535:
                 raise OperationError("port", "Port must be between 1 and 65535.")
-            run_serve(args.root, args.data_dir, args.host, args.port, stop_event, args.read_only)
+            run_serve(args.root, args.data_dir, args.host, args.port, stop_event, args.read_only,
+                      allow_loopback_relay=args.allow_loopback_relay)
         elif args.mode == "session-helper":
             from .session_helper import run_session_helper
             run_session_helper(stop_event, args.session_id)

@@ -28,6 +28,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+from relay.protocol import agent_hostname
+
 from .contracts import OperationError
 
 UTC = timezone.utc
@@ -55,12 +57,12 @@ def reject_links(path: Path) -> None:
             raise OperationError("unsafe_state_path", "State paths cannot contain links or reparse points.", 500)
 
 
-def protect_path(path: Path) -> None:
+def protect_path(path: Path, *, gateway_metadata: bool = False) -> None:
     """Replace, rather than merge, ACLs; fail closed on hardening failure.
 
-    Windows access is restricted to SYSTEM, Administrators, and the current
-    execution principal. This deliberately removes foreign/inherited SID grants
-    when restoring state. POSIX permission hardening is not a secret-store fallback.
+    Elevated Windows state is Administrators-owned and writable only by SYSTEM
+    and Administrators, matching service startup verification. Unelevated local
+    evaluation also retains its current principal. POSIX modes are not a secret store.
     """
     path = Path(path)
     reject_links(path)
@@ -80,24 +82,41 @@ def protect_path(path: Path) -> None:
             current = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
         finally:
             token.Close()
-        sids = {win32security.ConvertSidToStringSid(current): current}
-        for sid in ("S-1-5-18", "S-1-5-32-544"):
-            sids[sid] = win32security.ConvertStringSidToSid(sid)
+        administrators = win32security.ConvertStringSidToSid("S-1-5-32-544")
+        current_sid = win32security.ConvertSidToStringSid(current)
+        elevated = current_sid == "S-1-5-18" or win32security.CheckTokenMembership(None, administrators)
+        sids = {sid: win32security.ConvertStringSidToSid(sid) for sid in ("S-1-5-18", "S-1-5-32-544")}
+        if not elevated:
+            sids[current_sid] = current
         acl = win32security.ACL()
         flags = 3 if path.is_dir() else 0
         for sid in sids.values():
             acl.AddAccessAllowedAceEx(win32security.ACL_REVISION, flags, ntsecuritycon.FILE_ALL_ACCESS, sid)
-        win32security.SetNamedSecurityInfo(str(path), win32security.SE_FILE_OBJECT,
-            win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
-            None, None, acl, None)
+        metadata_sid = None
+        if elevated and gateway_metadata:
+            from .service import GATEWAY_METADATA_RIGHTS, gateway_sid
+            metadata_sid = gateway_sid()
+            acl.AddAccessAllowedAceEx(win32security.ACL_REVISION, 0, GATEWAY_METADATA_RIGHTS,
+                                     win32security.ConvertStringSidToSid(metadata_sid))
+        information = win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION
+        if elevated:
+            information |= win32security.OWNER_SECURITY_INFORMATION
+        win32security.SetNamedSecurityInfo(str(path), win32security.SE_FILE_OBJECT, information,
+                                          administrators if elevated else None, None, acl, None)
         descriptor = win32security.GetNamedSecurityInfo(str(path), win32security.SE_FILE_OBJECT,
-                                                      win32security.DACL_SECURITY_INFORMATION)
+            win32security.DACL_SECURITY_INFORMATION | win32security.OWNER_SECURITY_INFORMATION)
+        if elevated and win32security.ConvertSidToStringSid(descriptor.GetSecurityDescriptorOwner()) != "S-1-5-32-544":
+            raise ValueError("unexpected owner")
         actual = descriptor.GetSecurityDescriptorDacl()
-        if actual is None or actual.GetAceCount() != len(sids):
+        if actual is None or actual.GetAceCount() != len(sids) + (metadata_sid is not None):
             raise ValueError("unexpected ACL")
         for index in range(actual.GetAceCount()):
             ace = actual.GetAce(index)
-            if ace[0][0] != 0 or ace[1] != ntsecuritycon.FILE_ALL_ACCESS or win32security.ConvertSidToStringSid(ace[2]) not in sids:
+            sid = win32security.ConvertSidToStringSid(ace[2])
+            if sid == metadata_sid:
+                if ace[0] != (0, 0) or ace[1] != GATEWAY_METADATA_RIGHTS:
+                    raise ValueError("unexpected gateway metadata grant")
+            elif ace[0][0] != 0 or ace[1] != ntsecuritycon.FILE_ALL_ACCESS or sid not in sids:
                 raise ValueError("unexpected ACL entry")
         if not descriptor.GetSecurityDescriptorControl()[0] & 0x1000:
             raise ValueError("unprotected ACL")
@@ -111,6 +130,15 @@ def protected_directory(path: Path) -> Path:
     # Harden the parent before creating any secret-bearing children.
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     protect_path(path)
+    return path
+
+
+def protected_data_directory(path: Path) -> Path:
+    """Private root with noninheriting gateway descriptor/traverse access only."""
+    path = Path(os.path.abspath(path))
+    reject_links(path)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    protect_path(path, gateway_metadata=True)
     return path
 
 
@@ -176,7 +204,7 @@ def atomic_private_write(path: Path, content: bytes) -> None:
 @contextmanager
 def identity_lock(data_dir: Path):
     """Serialize local CLI/worker identity changes across processes."""
-    directory = protected_directory(data_dir)
+    directory = protected_data_directory(data_dir)
     path = directory / ".identity.lock"
     reject_links(path)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
@@ -211,7 +239,7 @@ def identity_lock(data_dir: Path):
 
 def agent_identity(data_dir: Path) -> dict:
     with _ID_LOCK, identity_lock(data_dir):
-        directory = protected_directory(data_dir)
+        directory = protected_data_directory(data_dir)
         path = directory / "identity.json"
         reject_links(path)
         if not path.exists():
@@ -255,7 +283,7 @@ def verify_signature(certificate: x509.Certificate, issuer: x509.Certificate) ->
 
 class CertificateAuthority:
     def __init__(self, data_dir: Path):
-        self.data_dir = protected_directory(data_dir)
+        self.data_dir = protected_data_directory(data_dir)
         self.directory = protected_directory(self.data_dir / "tls")
         self._lock = threading.RLock()
         self._ca = None
@@ -325,7 +353,8 @@ class CertificateAuthority:
             extras = metadata.get("hosts", []) if configured_hosts is None else configured_hosts
             if not isinstance(extras, list) or len(extras) > 64 or any(not isinstance(host, str) for host in extras):
                 raise OperationError("invalid_hosts", "Provide at most 64 approved DNS or IP names.")
-            hosts = {"localhost", "127.0.0.1", "::1", socket.gethostname(), socket.getfqdn(), *extras}
+            hosts = {"localhost", "127.0.0.1", "::1", socket.gethostname(), socket.getfqdn(),
+                     agent_hostname(identity["id"]), *extras}
             sans = []
             for host in sorted(hosts):
                 if not host or len(host) > 253 or any(char.isspace() for char in host) or "*" in host:

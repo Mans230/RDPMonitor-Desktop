@@ -86,13 +86,17 @@ class PathProtectionTests(unittest.TestCase):
             path.write_bytes(b'isolated test state')
             protect_path(path)
             descriptor = win32security.GetNamedSecurityInfo(
-                str(path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION)
+                str(path), win32security.SE_FILE_OBJECT,
+                win32security.DACL_SECURITY_INFORMATION | win32security.OWNER_SECURITY_INFORMATION)
             control, _ = descriptor.GetSecurityDescriptorControl()
             self.assertTrue(control & win32security.SE_DACL_PROTECTED)
             acl = descriptor.GetSecurityDescriptorDacl()
             sids = {win32security.ConvertSidToStringSid(acl.GetAce(index)[2])
                     for index in range(acl.GetAceCount())}
             self.assertEqual(sids, {'S-1-5-18', 'S-1-5-32-544'})
+            self.assertEqual(win32security.ConvertSidToStringSid(descriptor.GetSecurityDescriptorOwner()), 'S-1-5-32-544')
+            from agent.service import verify_protected_tree
+            verify_protected_tree(path, recursive=False, ancestors=False)
 
 
 if __name__ == '__main__':

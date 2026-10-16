@@ -9,6 +9,7 @@ import 'views.dart';
 import 'transfers.dart';
 import 'desktop.dart';
 import 'design.dart';
+import 'relay_views.dart';
 
 void main() { WidgetsFlutterBinding.ensureInitialized(); runApp(const MonitorApp()); }
 class MonitorApp extends StatelessWidget {
@@ -72,8 +73,17 @@ class _WorkspaceState extends State<Workspace> {
     catch (e) { if (mounted) setState(() => error = e.toString()); return null; }
   }
   void message(String text) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text))); }
-  Future<void> enroll() async {
+  Future<void> enroll() => showConnectCodeDialog(context, onEnrolled: fleet.add);
+  Future<void> enrollDirect() async {
     await showDialog<void>(context: context, barrierDismissible: false, builder: (_) => EnrollmentDialog(onEnrolled: fleet.add));
+  }
+  Future<void> connectionAction(String action) async {
+    switch (action) {
+      case 'connect': await enroll();
+      case 'prepare': if (mounted) await showPrepareInstallationDialog(context);
+      case 'relay': if (mounted) await showRelaySettingsDialog(context);
+      case 'direct': await enrollDirect();
+    }
   }
   Future<void> operate(Map<String, dynamic> operation) async {
     final machine = fleet.current;
@@ -120,7 +130,17 @@ class _WorkspaceState extends State<Workspace> {
         actions: [
           if (current != null) IconButton(onPressed: () => attempt(() => fleet.refresh(full: true)), tooltip: 'Refresh agent data', icon: const Icon(Icons.refresh_outlined)),
           if (Platform.isWindows) const DesktopMenu(),
-          IconButton(onPressed: enroll, tooltip: 'Enroll machine', icon: const Icon(Icons.add_link_outlined)),
+          PopupMenuButton<String>(
+            tooltip: 'Connect and install machines', icon: const Icon(Icons.add_link_outlined),
+            onSelected: (action) => unawaited(connectionAction(action)),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'connect', child: Text('Connect with code')),
+              PopupMenuItem(value: 'prepare', child: Text('Prepare agent installation')),
+              PopupMenuItem(value: 'relay', child: Text('Relay settings')),
+              PopupMenuDivider(),
+              PopupMenuItem(value: 'direct', child: Text('Advanced: direct HTTPS')),
+            ],
+          ),
           const SizedBox(width: 12),
         ],
       ),
@@ -200,7 +220,7 @@ class _WorkspaceState extends State<Workspace> {
           if (machine.busy) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
         ]),
         const SizedBox(height: 6),
-        Text('${machine.profile.endpoint}  ·  Last contact: ${timestamp(machine.lastContact?.toIso8601String())}', style: Theme.of(context).textTheme.bodySmall?.copyWith(fontFeatures: monitorFigures)),
+        Text('${_connectionLabel(machine.profile)}  ·  Last contact: ${timestamp(machine.lastContact?.toIso8601String())}', style: Theme.of(context).textTheme.bodySmall?.copyWith(fontFeatures: monitorFigures)),
         if (machine.freshness == 'Offline' || machine.freshness == 'Stale') Padding(
           padding: const EdgeInsets.only(top: 7),
           child: Text(machine.freshness == 'Offline' ? 'Agent contact is unavailable. Retained data is not current; operations require a connection.' : 'Telemetry is stale or incomplete. Review source warnings before acting.', style: TextStyle(color: colors.error, fontSize: 12)),
@@ -210,14 +230,18 @@ class _WorkspaceState extends State<Workspace> {
   }
   Widget content(MachineState? machine) {
     if (page == 'Machines') return machines();
-    if (page == 'Settings' && machine == null && Platform.isWindows) {
-      return ListView(padding: const EdgeInsets.all(20), children: const [DesktopSettingsLauncher()]);
+    if (page == 'Settings' && machine == null) {
+      return ListView(padding: const EdgeInsets.all(20), children: [
+        relaySettingsLauncher(), const SizedBox(height: 16),
+        if (Platform.isWindows) const DesktopSettingsLauncher(),
+      ]);
     }
     if (machine == null) return emptySetup();
     final children = <Widget>[
       if (machine.errors.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 16), child: Material(color: Theme.of(context).colorScheme.errorContainer, borderRadius: BorderRadius.circular(10), child: ExpansionTile(leading: const Icon(Icons.warning_amber_outlined), title: Text('${machine.errors.length} data source(s) unavailable'), subtitle: const Text('Retained data may be stale. Expand to inspect source errors.'), children: machine.errors.entries.map((e) => Padding(padding: const EdgeInsets.all(16), child: SelectableText('${e.key}: ${e.value}'))).toList()))),
       if (page == 'Overview' || page == 'Monitoring') Overview(machine: machine, expanded: page == 'Monitoring'),
       if (page == 'Activity') ActivityView(machine: machine, onJob: (job) => jobDetail(machine, job), onError: (e) => setState(() => error = e), onRefresh: () => fleet.refresh(full: true)),
+      if (page == 'Settings') relaySettingsLauncher(),
       if (page == 'Settings' && Platform.isWindows) const DesktopSettingsLauncher(),
       if (page == 'Settings') SettingsView(machine: machine, fleet: fleet, onError: (e) => setState(() => error = e)),
       if (page == 'Devices & access') DevicesView(machine: machine, onError: (e) => setState(() => error = e)),
@@ -227,15 +251,26 @@ class _WorkspaceState extends State<Workspace> {
     if (sectionMap.containsKey(page)) children.add(operations(machine));
     return Align(alignment: Alignment.topCenter, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1440), child: ListView(padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 600 ? 16 : 28), children: children)));
   }
+  Widget relaySettingsLauncher() => MonitorPanel(child: ListTile(
+    contentPadding: EdgeInsets.zero, leading: const Icon(Icons.hub_outlined),
+    title: const Text('Relay and installation'),
+    subtitle: const Text('Configure your self-hosted relay, prepare VM invitations and manage routes.'),
+    trailing: const Icon(Icons.chevron_right_outlined),
+    onTap: () => showRelaySettingsDialog(context),
+  ));
   Widget emptySetup() => Center(child: SingleChildScrollView(padding: const EdgeInsets.all(28), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     const MonitorMark(size: 48), const SizedBox(height: 22),
     Text('Your fleet starts here', style: Theme.of(context).textTheme.headlineLarge),
-    const SizedBox(height: 12), Text('Enroll your first Windows machine', style: Theme.of(context).textTheme.titleLarge),
-    const SizedBox(height: 12), const Text('No machines are enrolled on this device. Connect directly to a Windows agent over certificate-authenticated HTTPS. No browser panel, shared password, or Telegram credentials are required.'),
-    const SizedBox(height: 20), const Text('1. Install the agent using the signed agent installer on the machine you administer. For a source checkout, install agent/requirements.txt and use the commands below in an elevated terminal. Configure the server certificate hosts for your remote hostname before pairing.\n\n2. Start the agent and create a short-lived pairing challenge locally on that machine.\n\n3. Copy its HTTPS address, exact server SHA256 fingerprint, and pairing code into Enroll machine. Verify the fingerprint over a trusted channel, never from the same untrusted connection.'),
-    const SizedBox(height: 16), const SelectableText('python -m agent serve --data-dir C:\\ProgramData\\RDPMonitor --port 9443\npython -m agent pair --data-dir C:\\ProgramData\\RDPMonitor --role owner', style: TextStyle(fontFamily: 'monospace')),
-    const SizedBox(height: 16), const Text('For read-only local evaluation add --read-only to serve. Do not open inbound access to untrusted networks without the deployment firewall policy. Enrollment codes expire and can be used once. Private keys are generated on this device and stored in OS-protected storage.'),
-    const SizedBox(height: 22), FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add_link), label: const Text('Enroll machine')),
+    const SizedBox(height: 12), Text('Install on the VM. Connect with a code.', style: Theme.of(context).textTheme.titleLarge),
+    const SizedBox(height: 12), const Text('Connect Windows VMs across networks without opening inbound management ports or configuring a VPN. Agent traffic remains end-to-end certificate-authenticated HTTPS inside the relay tunnel.'),
+    const SizedBox(height: 20), const Text('1. Deploy your self-hosted HTTPS relay and save its address and administration key in Relay settings once.\n\n2. Choose Prepare agent installation. Run the agent installer on your VM, approve administrator elevation and paste the installation invitation.\n\n3. Copy the private, expiring connection code from the VM setup window into Connect with code here. The agent continues running after this app or the RDP session closes.'),
+    const SizedBox(height: 16), const Text('This project does not supply a publicly hosted relay. Use the accurately labeled installer from GitHub Releases; unsigned previews are monitoring-only and are not production-signed installations. Invitations are single-use. Private client keys stay in OS-protected storage.'),
+    const SizedBox(height: 22), Wrap(spacing: 12, runSpacing: 12, children: [
+      FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add_link), label: const Text('Connect with code')),
+      OutlinedButton.icon(onPressed: () => showPrepareInstallationDialog(context), icon: const Icon(Icons.install_desktop_outlined), label: const Text('Prepare agent installation')),
+      TextButton(onPressed: () => showRelaySettingsDialog(context), child: const Text('Relay settings')),
+    ]),
+    const SizedBox(height: 12), TextButton(onPressed: enrollDirect, child: const Text('Advanced: connect directly over HTTPS')),
   ]))));
   Widget machines() {
     if (fleet.machines.isEmpty) return emptySetup();
@@ -255,7 +290,7 @@ class _WorkspaceState extends State<Workspace> {
       return Align(alignment: Alignment.topCenter, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 1440), child: ListView(
         padding: EdgeInsets.all(constraints.maxWidth < 600 ? 16 : 28),
         children: [
-          SectionHeader(title: 'Machines', subtitle: 'Every action targets one enrolled machine. No destructive bulk operations.', action: FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add_link_outlined), label: const Text('Enroll machine'))),
+          SectionHeader(title: 'Machines', subtitle: 'Every action targets one enrolled machine. No destructive bulk operations.', action: FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add_link_outlined), label: const Text('Connect with code'))),
           const SizedBox(height: 22),
           MonitorPanel(child: Wrap(spacing: 40, runSpacing: 18, children: [
             fleetMetric('Enrolled', '${all.length}'),
@@ -295,7 +330,7 @@ class _WorkspaceState extends State<Workspace> {
                 cells: [
                   DataCell(ConstrainedBox(constraints: const BoxConstraints(maxWidth: 310), child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(machine.profile.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 4), Text(machine.profile.endpoint, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 4), Text(_connectionLabel(machine.profile), maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
                   ]))),
                   DataCell(statusChip(machine.freshness)), DataCell(Text(machine.profile.role)),
                   DataCell(Text(timestamp(machine.lastContact?.toIso8601String()), style: TextStyle(fontFeatures: monitorFigures))),
@@ -328,7 +363,7 @@ class _WorkspaceState extends State<Workspace> {
       const SizedBox(width: 12),
       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(machine.profile.name, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 6), Text(machine.profile.endpoint, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 6), Text(_connectionLabel(machine.profile), style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 9),
         Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           statusChip(machine.freshness), Text('${machine.profile.role} access', style: Theme.of(context).textTheme.bodySmall),
@@ -344,8 +379,10 @@ class _WorkspaceState extends State<Workspace> {
     await showDialog<void>(context: context, builder: (dialog) => AlertDialog(title: const Text('Machine profile'), content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
       TextField(controller: name, decoration: const InputDecoration(labelText: 'Display name')), const SizedBox(height: 14),
       TextField(controller: group, decoration: const InputDecoration(labelText: 'Group')), const SizedBox(height: 14),
-      TextField(controller: endpoint, decoration: const InputDecoration(labelText: 'HTTPS origin')), const SizedBox(height: 10),
-      const Text('Moving addresses does not change the enrolled identity. The new hostname must be covered by the agent certificate. Removing a local profile does not revoke the remote device certificate.'),
+      TextField(controller: endpoint, readOnly: machine.profile.relay != null, decoration: InputDecoration(labelText: machine.profile.relay == null ? 'HTTPS origin' : 'Agent TLS identity (read-only)')), const SizedBox(height: 10),
+      Text(machine.profile.relay == null
+        ? 'Moving addresses does not change the enrolled identity. The new hostname must be covered by the agent certificate. Removing a local profile does not revoke the remote device certificate.'
+        : 'Relay: ${machine.profile.relay!.origin}\nTo change this machine’s relay, obtain a new connection code locally. Removing this profile does not revoke the remote device certificate or relay route.'),
     ]))), actions: [
       TextButton(onPressed: () async { final ok = await confirm(dialog, title: 'Remove local profile?', message: 'Secure credentials for ${machine.profile.name} will be erased from this app. Revoke the device on the agent first if it must no longer have access.', danger: true); if (ok) { final done = await attempt(() async { await fleet.remove(machine.profile.id); return true; }); if (done == true && dialog.mounted) Navigator.pop(dialog); } }, child: const Text('Remove')),
       TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
@@ -416,10 +453,12 @@ class _WorkspaceState extends State<Workspace> {
   }
   Widget help(MachineState machine) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text('Agent maintenance', style: Theme.of(context).textTheme.headlineMedium), const SizedBox(height: 12),
-    const Text('The worker owns monitoring, protection, schedules, and jobs independently of this app. Cancel means a request to stop remaining work, never rollback. Interrupted jobs are not replayed automatically.\n\nRemote session actions require an available interactive user-session helper. Powered-off machines cannot report their own outage. An external observer is needed for reliable machine-down alerts.\n\nCertificate renewal or server identity replacement requires trusted local pairing. Never disable certificate checking. If access was revoked, ask an owner to issue a new pairing challenge.\n\nInstall, repair, update, and remove the agent using the supplied signed deployment scripts and release instructions on that Windows machine. Agent removal preserves policy/data unless explicitly requested otherwise.'),
+    const Text('The worker owns monitoring, protection, schedules, and jobs independently of this app. Cancel means a request to stop remaining work, never rollback. Interrupted jobs are not replayed automatically.\n\nRemote session actions require an available interactive user-session helper. Powered-off machines cannot report their own outage. An external observer is needed for reliable machine-down alerts.\n\nRelay connections retain end-to-end agent HTTPS and mutual TLS. The relay can route or disconnect traffic, not authorize Windows operations. Revoking a device at the agent remains effective through an existing relay connection.\n\nIf a connection code expires, reopen the agent installer on the VM to generate a fresh code. Never disable certificate checks. Install, repair, update and remove using the matching release installer or signed deployment scripts. Unsigned previews are monitoring-only. Removal preserves policy/data unless explicitly requested otherwise.'),
     const SizedBox(height: 14), DataTree(value: machine.health),
   ]);
 }
+
+String _connectionLabel(MachineProfile profile) => profile.relay == null ? profile.endpoint : 'Relay · ${profile.relay!.origin}';
 
 Future<bool> confirm(BuildContext context, {required String title, required String message, bool danger = false}) async => await showDialog<bool>(context: context, builder: (dialog) => AlertDialog(
   icon: Icon(danger ? Icons.warning_amber : Icons.info_outline), title: Text(title), content: SizedBox(width: 520, child: SingleChildScrollView(child: Text(message))),

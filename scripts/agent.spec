@@ -4,11 +4,13 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 root = Path(SPECPATH).parent
 hidden = ['agent.__main__', 'agent.service', 'agent.migration', 'agent.management',
+          'agent.setup', 'agent.relay', 'relay.protocol',
           'servicemanager', 'win32timezone', 'win32serviceutil', 'win32security',
           'win32crypt', 'win32pipe', 'win32file', 'win32ts', 'win32profile',
           'win32process', 'win32event', 'win32con', 'win32api', 'win32service',
           'win32net', 'win32netcon', 'pywintypes', 'pythoncom', 'PIL.ImageGrab']
-hidden += collect_submodules('uvicorn') + collect_submodules('matplotlib.backends.backend_agg')
+hidden += (collect_submodules('uvicorn') + collect_submodules('websockets')
+           + collect_submodules('matplotlib.backends.backend_agg'))
 datas = [(str(root / 'rdp_monitor.py'), '.'),
          (str(root / 'backup' / 'app'), 'backup/app'),
          (str(root / 'config.example.json'), '.'),

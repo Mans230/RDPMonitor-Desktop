@@ -2,14 +2,14 @@
 
 ## Deployment status
 
-The Windows native client and frozen agent can be built locally. Local development builds are not authenticated production releases. Production installation requires a valid publisher code-signing certificate with its private key, an HTTPS timestamp service, and a release produced by `scripts/build-release.ps1`. Never bypass signature checks to install an unsigned development build.
+The Windows native client, frozen agent and native installer can be built locally. Production installation requires a valid publisher code-signing certificate/private key, an HTTPS timestamp service and an authenticated release. A distinct, explicitly consented unsigned preview installer forces monitoring-only services and viewer enrollment. It never falls back from failed production verification; neither preview packaging nor local smoke establishes production readiness.
 
 Run the client as the signed-in user. The agent's privileged worker and constrained gateway are separate Windows services. Closing or exiting the client does not stop monitoring, protection, accepted jobs or backup scheduling. Stopping/removing the services is a different administrative action.
 
 ## Build prerequisites
 
 - Windows x64; Python 3.14 with the pinned `requirements.txt` environment.
-- Flutter stable/Dart 3.13 and the committed `clients/app/pubspec.lock`.
+- Flutter with Dart **3.13.0 or newer within 3.x** and the committed `clients/app/pubspec.lock`. The bounded native WebSocket API requires this SDK minimum.
 - Visual Studio 2022 C++ build tools, Windows SDK and ATL; a short checkout path avoids native build path limits.
 - Windows SDK `signtool.exe` and a valid RSA code-signing certificate in the current user's certificate store, including the code-signing EKU and private key.
 - The matching licensed x64 `Microsoft.VC143.CRT` release redistributable directory and official Microsoft redistribution notice. The build copies these DLLs beside the client; do not use `debug_nonredist`.
@@ -30,7 +30,77 @@ The build bundles the agent runtime and native client, signs PE files and PowerS
 
 For a Build Tools installation, the CRT directory is typically `VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT` beneath its installation root; the redistribution notice is under `Licenses\1033\Redist.txt`. Authenticate and retain the toolchain's redistribution terms. End users do not need Visual Studio, Python or Flutter to run the packaged client/runtime.
 
-## Fresh installation
+Build the native wizard around that complete authenticated package:
+
+```powershell
+.\scripts\build-installer.ps1 -AcquireCompiler
+.\scripts\build-installer.ps1 -Package 'C:\Releases\RDPMonitor-1.0.0-windows-x64' `
+  -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl
+```
+
+Compiler acquisition is separate from application installation. It checks the immutable official Inno Setup 7.1.0 asset SHA256 and its Windows Authenticode chain/current official publisher before executing the tool installer. Production setup and its embedded uninstaller are signed; no self-signed publisher or automatic unsigned fallback is created. Retain Inno's embedded notices and review its current commercial-use guidance for your organization.
+
+For an explicitly unsigned evaluation build, use the separate parameter set:
+
+```powershell
+.\scripts\build-release.ps1 -UnsignedPreview -Version 1.0.0 -BuildNumber 2 `
+  -VCRuntimeDirectory $LicensedX64CrtDirectory `
+  -VCRedistributionNoticeFile $MicrosoftRedistributionNotice `
+  -Python .\.venv\Scripts\python.exe
+.\scripts\build-installer.ps1 `
+  -Package '.\dist\RDPMonitor-1.0.0-windows-x64-UNSIGNED-PREVIEW' -UnsignedPreview
+```
+
+This builds the complete runtime, dependency/font/Microsoft notices, an explicitly unsigned inventory, ZIP/checksum and then a monitoring-only setup executable. Unsigned checksums establish file integrity, not publisher authenticity. The preview setup cannot enable administration, protection or schedules; use a disposable Windows VM first. The developer/source agent CLI is separate from this installed preview policy: source evaluation must explicitly use `--read-only`.
+
+## Install anywhere and connect with a code
+
+### One-time relay deployment
+
+The operator supplies an internet-reachable server, Docker/Compose, a DNS hostname, ports **80/443 on the relay server**, an ACME contact email and a private administration key. No inbound management port is opened on the Windows VMs. A container build or HTTPS domain is not supplied by GitHub Releases.
+
+From a source checkout on the relay host:
+
+1. Copy `deploy/relay/.env.example` to private `deploy/relay/.env`. Set the real hostname and ACME email.
+2. Generate a canonical random 256-bit administration key, for example `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`, and put it in that private file. Restrict file permissions and never commit it, paste `docker compose config` output publicly, or put the key in URLs.
+3. Point the hostname's DNS at that host, then start the supplied stack:
+
+```sh
+docker compose --env-file deploy/relay/.env -f deploy/relay/compose.yaml up --build -d
+```
+
+Caddy obtains/renews the public HTTPS certificate. Only Caddy publishes ports; the Python broker and persistent SQLite volume remain on the private container network. The broker trusts only Caddy's fixed private address for forwarded scheme information. Request/access logging is disabled to avoid leaking capability metadata. Check `https://YOUR-RELAY-DOMAIN/health` for `{"status":"ok","protocol":1}`. An open TCP healthcheck alone is not public HTTPS acceptance.
+
+Run one broker process per database. Exclusive database locking rejects an independent second worker; live socket rendezvous is not a multi-worker service. Back up its persistent volume and administration key, maintain host/container security updates, monitor availability, and keep its origin stable. SQLite holds hashed random credentials and encrypted envelopes, not decrypted agent traffic or Windows authority keys.
+
+For non-container deployments, install `relay/requirements.txt`, set private `RDP_RELAY_ADMIN_KEY` and `RDP_RELAY_PUBLIC_ORIGIN`, and run `python -m relay` behind a correctly configured HTTPS reverse proxy. Use the supplied launcher/native WebSocket protocol: a generic `uvicorn relay.server:...` configuration does not provide the required hard socket teardown. Expose the plaintext listener only to the trusted proxy; never trust wildcard forwarded-header sources.
+
+### Operator desktop and VM setup
+
+1. Run the native desktop as the operator. Open **Relay settings**, enter the HTTPS origin and administration key, and choose **Save & load routes**. Both settings are held in OS-protected storage.
+2. Choose **Prepare agent installation**. Its one-use installation invitation is valid for 15 minutes. Copy it privately to the intended VM.
+3. Download the matching Windows setup from this project's releases, verify its label/publisher instructions, run it on the VM and approve administrator elevation. Paste the installation invitation. Release installers require valid HTTPS; arbitrary certificate bypass and remote HTTP are not available.
+4. Monitoring-only is selected by default. The unsigned preview forces it and issues a viewer device approval. A correctly signed production setup can enable administration only after explicit local consent.
+5. Copy the real five-minute connection code from the setup completion page into **Connect with code** on the desktop. The app decrypts identity/routing metadata locally, pins the agent before sending the one-use enrollment secret, then uses ordinary CA/hostname/mTLS validation for telemetry and operations.
+
+The VM gateway binds `127.0.0.1:8443`; the constrained gateway connects outward using HTTPS/WSS. Neither a public VM address, management port forwarding nor a VPN is required. Existing Windows/RDP firewall protection is not relaxed. Each Windows VM needs its own installation and persistent identity; copying DPAPI state to another VM is not enrollment. Linux agents and hypervisor provisioning/power-on are not implemented.
+
+Keep connection codes and installation invitations private. They are distinct copy/paste URIs, not globally resolvable six-digit PINs or browser links. The connection secret stays in the fragment; lookup uses only its SHA256 identifier. The relay cannot decrypt or replace the AES-GCM envelope or authorize Windows requests. It can observe routing metadata and deny availability.
+
+Reopen the same installer and choose **Pair installed agent** to generate a new connection code; no consumed installation invitation is reused. **Repair the same release** preserves the machine identity, enrolled devices, routing, data and deployment mode. Version/trust changes use the signed update lifecycle, not an unsigned repair path. A failed post-install helper displays recovery instructions and setup exit code `42`, rather than claiming a completed connection; the protected runtime remains available for repair.
+
+The private exchange directory is `%ProgramData%\RDPMonitor\setup\<random-session>`. It is protected before any invitation/result is written, and cleaned when setup exits. No invitation, connection code or routing token is placed in process arguments. Worker state remains SYSTEM/Administrators-only; the gateway receives noninheriting root descriptor/traverse rights plus read access to its own TLS/routing inputs, not the worker database or CA key.
+
+Use **Devices & access** to revoke a lost Windows device certificate. **Relay settings → Revoke route** instead permanently disconnects that installation's transport credentials/grants; it does not uninstall the agent or revoke its Windows device certificates. Identity tombstones prevent takeover/re-registration of that same agent ID. Do not revoke a route as a temporary pause. There is no automatic identity reset or cross-relay migration.
+
+The default single-broker bounds are 256 retained agent identities (including revocation tombstones), 128 live installation invitations, 32 grants and 32 unexpired envelopes per route, 16 streams per route and 256 total streams. Pending grants expire after ten minutes; the first admitted connection activates a grant until revocation. Pairing envelopes expire independently. Closing sockets remain in quota accounting until actual transport teardown; stalled output is forcibly aborted after two seconds. Expired records are cleaned without replaying application requests.
+
+### Local relay development
+
+For isolated development only, `python -m relay --allow-loopback-http --public-origin http://127.0.0.1:8765` admits a numeric-loopback HTTP origin/listener. The source gateway requires explicit `--allow-loopback-relay`, and only debug Flutter builds accept this transport. Inner agent HTTPS/mTLS remains real. Release clients/installers reject this exception, and no mode disables remote certificate validation.
+
+
+## Advanced direct or loopback installation
 
 Keep provider/physical console access available for the first deployment. Test on a disposable VM before a production RDP-only machine. Extract the authenticated release and run its signed installer from an elevated PowerShell terminal:
 
@@ -64,7 +134,7 @@ $agent = Join-Path $deployment.release 'agent\RDPMonitorAgent.exe'
 & $agent pair --role owner
 ```
 
-Open **RDPMonitor** from the Start Menu as a normal user. Choose **Enroll machine** and enter the HTTPS endpoint, one-use pairing code and exact SHA256 server fingerprint printed locally. Compare the fingerprint over a trusted channel. Client private keys are generated on the client and stored in OS-protected storage. Enrollment role is approved locally, not chosen by the remote device.
+Open **RDPMonitor** from the Start Menu as a normal user. For this direct method choose **Advanced: direct HTTPS** from the connection menu and enter the endpoint, one-use pairing code and exact SHA256 server fingerprint printed locally. Compare the fingerprint over a trusted channel. Client private keys stay in OS-protected storage. Enrollment role is approved locally, never chosen by a remote enrollment request.
 
 For DNS/private endpoint changes, approve the complete desired SAN set locally before pairing:
 
@@ -76,7 +146,7 @@ Start-Service RDPMonitorWorker
 Start-Service RDPMonitorGateway
 ```
 
-This changes the server certificate/fingerprint. Restart both services in the order shown so the listener loads it; source `serve` users must restart their integrated process instead. Then issue a fresh pairing approval and verify the new fingerprint before enrollment. Never disable TLS verification to work around an endpoint/name mismatch. The installed worker includes its configured listener address when preparing its certificate.
+This changes the server certificate/fingerprint. Restart both services in the order shown so the listener loads it; source `serve` users must restart their integrated process instead. Then issue a fresh pairing approval and verify the new fingerprint before enrollment. Never disable TLS verification to work around a mismatch. The worker includes its configured listener and stable `<agent-id>.rdpmonitor.invalid` tunnel name while retaining the locally approved direct SAN set; the synthetic tunnel name does not require DNS resolution.
 
 Use **Devices & access** to inspect/revoke enrolled devices. Revocation is checked for current requests and job admission; losing network connectivity is not revocation or cancellation.
 
@@ -148,6 +218,8 @@ Current automated checks and local smoke scenarios do not replace deployment acc
 | Sessions | Unlocked/locked/disconnected/multiple-user behavior; correct execution identity; no SYSTEM desktop fallback |
 | Updates | Signed fresh install, migration under original account, update failure, exact-state rollback, repair and removal preserving data/policy |
 | Desktop | Actual installed UI, keyboard/accessibility, offline/reconnect, confirmations, artifact transfer, startup and notification-area behavior |
+| Relay | Public Caddy HTTPS/WSS, no VM ingress, offline/reconnect and bounded slow-reader cleanup, expiry/reuse, misrouting, real transfer and live device/route revocation |
+| Native setup | Fresh VM invitation/code completion, rejected/expired invitation, failure exit `42`, same-release repair/pairing, uninstall preserving policy/data and signed production publisher acceptance |
 | Imaging | Real complete image file set, interruption/recovery, and actual VM boot where supported; file creation alone is insufficient |
 | Mobile | macOS/Xcode/iOS provisioning, production Android signing, real-device lifecycle/network changes, token registration and provider delivery |
 

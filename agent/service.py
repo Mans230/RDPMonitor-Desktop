@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -12,6 +13,13 @@ GATEWAY = 'RDPMonitorGateway'
 PIPE = r'\\.\pipe\RDPMonitor.Worker.v1'
 SYSTEM_SID = 'S-1-5-18'
 ADMIN_SID = 'S-1-5-32-544'
+GATEWAY_METADATA_RIGHTS = 0x000200A0  # READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE; not inherited.
+
+
+def gateway_sid() -> str:
+    """Derive the fixed virtual-service SID before SCM registration exists."""
+    digest = hashlib.sha1(GATEWAY.upper().encode('utf-16-le')).digest()
+    return 'S-1-5-80-' + '-'.join(str(int.from_bytes(digest[i:i + 4], 'little')) for i in range(0, 20, 4))
 
 
 def data_directory() -> Path:
@@ -124,7 +132,13 @@ def dispatch(kind: str) -> None:
                 resources = Path(getattr(sys, '_MEIPASS', root))
                 os.chdir(resources)
                 if kind == 'worker':
-                    run_worker(resources, data, self.stop_event, pipe_name=config.get('pipe_name', PIPE))
+                    read_only = config.get('read_only', False)
+                    if type(read_only) is not bool:
+                        raise RuntimeError('Deployment read_only must be a Boolean')
+                    if config.get('unsigned_preview') is True and not read_only:
+                        raise RuntimeError('Unsigned preview deployments must be monitoring-only')
+                    run_worker(resources, data, self.stop_event, pipe_name=config.get('pipe_name', PIPE),
+                               read_only=read_only)
                 else:
                     run_gateway(resources, data, config['host'], int(config['port']), self.stop_event,
                                 pipe_name=config.get('pipe_name', PIPE))

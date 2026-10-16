@@ -138,10 +138,10 @@ class MonitorPanel extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   const MonitorPanel({super.key, required this.child, this.padding = const EdgeInsets.all(22)});
   @override
-  Widget build(BuildContext context) => Container(
-    padding: padding,
-    decoration: BoxDecoration(color: Theme.of(context).colorScheme.surface, borderRadius: monitorRadius),
-    child: child,
+  Widget build(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.surface,
+    borderRadius: monitorRadius,
+    child: Padding(padding: padding, child: child),
   );
 }
 

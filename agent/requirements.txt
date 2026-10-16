@@ -5,6 +5,7 @@ pydantic==2.14.1
 pydantic-core==2.50.1
 uvicorn==0.54.0
 h11==0.16.0
+websockets==15.0.1
 anyio==4.15.1
 annotated-types==0.8.0
 annotated-doc==0.0.5

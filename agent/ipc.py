@@ -134,11 +134,12 @@ def protect_path(path: Path, read_sid=None, directory=False):
     """Replace inherited permissions, never grant gateway access to state/CA secrets."""
     *_, security = windows_modules()
     inherited = "OICI" if directory else ""
-    sddl = f"D:P(A;{inherited};FA;;;SY)(A;{inherited};FA;;;BA)"
+    sddl = f"O:BAD:P(A;{inherited};FA;;;SY)(A;{inherited};FA;;;BA)"
     if read_sid:
         sddl += f"(A;{inherited};GRGX;;;{read_sid})"
     descriptor = security.ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1)
-    security.SetFileSecurity(str(path), security.DACL_SECURITY_INFORMATION |
+    security.SetFileSecurity(str(path), security.OWNER_SECURITY_INFORMATION |
+                             security.DACL_SECURITY_INFORMATION |
                              security.PROTECTED_DACL_SECURITY_INFORMATION, descriptor)
 
 

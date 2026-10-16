@@ -84,11 +84,39 @@ class AgentSecurityTests(unittest.TestCase):
         self.assertIn(socket.gethostname().lower(), names.get_values_for_type(x509.DNSName))
         self.assertIn(ipaddress.ip_address("127.0.0.1"), names.get_values_for_type(x509.IPAddress))
         self.assertIn(ipaddress.ip_address("::1"), names.get_values_for_type(x509.IPAddress))
+        self.assertIn(info["agent_id"] + ".rdpmonitor.invalid", names.get_values_for_type(x509.DNSName))
+        from agent.service import verify_protected_tree
+        verify_protected_tree(self.directory, ancestors=False)
         protected = (self.directory / "tls" / "ca.key.dpapi").read_bytes()
         self.assertTrue(protected.startswith(b"dpapi:"))
         self.assertNotIn(b"PRIVATE KEY", protected)
         self.assertEqual(CertificateAuthority(self.directory).ensure()["fingerprint"], info["fingerprint"])
         self.assertTrue(Path(info["key_path"]).exists())
+
+    def test_worker_startup_preserves_gateway_descriptor_access_without_private_data_access(self):
+        import win32security
+        from agent.service import GATEWAY_METADATA_RIGHTS, gateway_sid
+
+        def grants(path):
+            descriptor = win32security.GetNamedSecurityInfo(
+                str(path), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION)
+            acl = descriptor.GetSecurityDescriptorDacl()
+            return {win32security.ConvertSidToStringSid(acl.GetAce(index)[2]): acl.GetAce(index)
+                    for index in range(acl.GetAceCount())}
+
+        sid = gateway_sid()
+        self.ca.ensure()
+        # Both a worker restart and local enrollment re-enter root hardening.
+        CertificateAuthority(self.directory).ensure()
+        self.store.identity()
+        root_grant = grants(self.directory)[sid]
+        self.assertEqual(root_grant[0], (win32security.ACCESS_ALLOWED_ACE_TYPE, 0))
+        self.assertEqual(root_grant[1], GATEWAY_METADATA_RIGHTS)
+        self.assertFalse(root_grant[1] & 0x3)  # No directory listing or file writes.
+        for private in (self.directory / "identity.json", self.store.path,
+                        self.directory / "tls", self.directory / "tls" / "ca.key.dpapi"):
+            with self.subTest(path=private.name):
+                self.assertNotIn(sid, grants(private))
 
     def test_remote_san_reissue_preserves_authority_and_enrolled_identity(self):
         actor, bundle = self.enroll()

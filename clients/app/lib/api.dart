@@ -6,6 +6,7 @@ import 'package:basic_utils/basic_utils.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart' show compute;
+import 'relay.dart';
 
 Map<String, dynamic> object(dynamic value) => value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
 List<Map<String, dynamic>> records(dynamic value) => value is List ? value.map(object).toList() : [];
@@ -45,14 +46,17 @@ class MachineProfile {
   final String fingerprint;
   final String deviceId;
   final String role;
+  final RelayRoute? relay;
   MachineProfile({required this.id, required this.name, required this.group, required this.endpoint,
     required this.certificate, required this.privateKey, required this.ca, required this.fingerprint,
-    required this.deviceId, required this.role});
+    required this.deviceId, required this.role, this.relay});
   factory MachineProfile.fromJson(Map<String, dynamic> j) => MachineProfile(id: j['id'], name: j['name'], group: j['group'] ?? '',
     endpoint: j['endpoint'], certificate: j['certificate'], privateKey: j['privateKey'], ca: j['ca'],
-    fingerprint: j['fingerprint'], deviceId: j['deviceId'], role: j['role'] ?? 'unknown');
+    fingerprint: j['fingerprint'], deviceId: j['deviceId'], role: j['role'] ?? 'unknown',
+    relay: j['relay'] == null ? null : RelayRoute.fromJson(Map<String, dynamic>.from(j['relay'])));
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'group': group, 'endpoint': endpoint,
-    'certificate': certificate, 'privateKey': privateKey, 'ca': ca, 'fingerprint': fingerprint, 'deviceId': deviceId, 'role': role};
+    'certificate': certificate, 'privateKey': privateKey, 'ca': ca, 'fingerprint': fingerprint, 'deviceId': deviceId, 'role': role,
+    if (relay != null) 'relay': relay!.toJson()};
 }
 
 class ProfileVault {
@@ -90,7 +94,11 @@ Uri serverUri(String endpoint) {
 class AgentApi {
   final MachineProfile profile;
   late final HttpClient _client;
+  RelayTransport? _relayTransport;
   AgentApi(this.profile) {
+    if (profile.relay != null && serverUri(profile.endpoint).toString() != 'https://${profile.id}.rdpmonitor.invalid') {
+      throw ApiException('The protected relay profile has an invalid agent origin.');
+    }
     final context = SecurityContext(withTrustedRoots: false);
     if (Platform.isIOS) {
       final der = base64Decode(profile.ca.replaceAll(RegExp(r'-----[^-]+-----|\s'), ''));
@@ -105,6 +113,10 @@ class AgentApi {
       context.usePrivateKeyBytes(utf8.encode(profile.privateKey));
     }
     _client = HttpClient(context: context)..connectionTimeout = const Duration(seconds: 15)..idleTimeout = const Duration(seconds: 20);
+    final route = profile.relay;
+    if (route != null) {
+      _relayTransport = RelayTransport(route: route, agentOrigin: serverUri(profile.endpoint), context: context)..attach(_client);
+    }
     // Normal connections use issued CA, hostname verification, and mutual TLS. Never accept arbitrary certificates.
   }
   Uri uri(String path, [Map<String, String>? query]) => serverUri(profile.endpoint).replace(path: '/api/v1$path', queryParameters: query);
@@ -152,7 +164,10 @@ class AgentApi {
       await temp.rename(destination.path);
     } catch (_) { if (await temp.exists()) await temp.delete(); rethrow; }
   }
-  void close() => _client.close(force: true);
+  void close() {
+    _relayTransport?.close();
+    _client.close(force: true);
+  }
 
   Future<Map<String, dynamic>> uploadChunk(String id, int offset, List<int> bytes) async {
     final request = await _client.putUrl(uri('/uploads/${Uri.encodeComponent(id)}', {'offset': '$offset'})).timeout(const Duration(seconds: 20));
@@ -173,16 +188,33 @@ class AgentApi {
     return MachineProfile(id: profile.id, name: profile.name, group: profile.group, endpoint: profile.endpoint,
       certificate: result['certificate'], privateKey: identity['key']!,
       ca: result['ca_certificate'] ?? profile.ca, fingerprint: profile.fingerprint,
-      deviceId: device['id'] ?? profile.deviceId, role: device['role'] ?? profile.role);
+      deviceId: device['id'] ?? profile.deviceId, role: device['role'] ?? profile.role, relay: profile.relay);
   }
 
   static Future<MachineProfile> enroll({required String endpoint, required String fingerprint, required String code,
-    required String name, required String group, required String deviceName}) async {
+    required String name, required String group, required String deviceName}) =>
+      _enroll(endpoint: endpoint, fingerprint: fingerprint, code: code, name: name, group: group, deviceName: deviceName);
+
+  static Future<MachineProfile> enrollRelay({required String connectionCode, required String name,
+    required String group, required String deviceName}) async {
+    final pairing = await RelayPairing.lookup(connectionCode);
+    return _enroll(endpoint: pairing.endpoint, fingerprint: pairing.fingerprint, code: pairing.pairingCode,
+      name: name.trim().isEmpty ? pairing.name : name, group: group, deviceName: deviceName,
+      relay: pairing.route, expectedAgentId: pairing.agentId, expires: pairing.expires);
+  }
+
+  static Future<MachineProfile> _enroll({required String endpoint, required String fingerprint, required String code,
+    required String name, required String group, required String deviceName, RelayRoute? relay,
+    String? expectedAgentId, DateTime? expires}) async {
     final origin = serverUri(endpoint);
     final pin = normalizedPin(fingerprint);
     if (pin.length != 64) throw ApiException('Enter the complete 64-digit SHA256 server fingerprint shown on the agent.');
-    final client = HttpClient(context: SecurityContext(withTrustedRoots: false))..connectionTimeout = const Duration(seconds: 15);
-    client.badCertificateCallback = (cert, host, port) => host == origin.host && port == origin.port && sha256.convert(cert.der).toString() == pin;
+    final context = SecurityContext(withTrustedRoots: false);
+    bool acceptFingerprint(X509Certificate cert) => sha256.convert(cert.der).toString() == pin;
+    final client = HttpClient(context: context)..connectionTimeout = const Duration(seconds: 15);
+    client.badCertificateCallback = (cert, host, port) => host == origin.host && port == origin.port && acceptFingerprint(cert);
+    final transport = relay == null ? null : (RelayTransport(route: relay, agentOrigin: origin,
+      context: context, onBadCertificate: acceptFingerprint)..attach(client));
     Future<Map<String, dynamic>> pinned(String method, String path, [Map<String, dynamic>? body]) async {
       final request = await client.openUrl(method, origin.replace(path: '/api/v1$path'));
       request.followRedirects = false;
@@ -198,17 +230,21 @@ class AgentApi {
     }
     try {
       final health = await pinned('GET', '/health');
+      if (expectedAgentId != null && health['agent_id'] != expectedAgentId) throw ApiException('Connection code agent identity mismatch.');
       final identity = await compute(createIdentity, deviceName.trim());
+      if (expires != null && !DateTime.now().isBefore(expires)) throw ApiException('Connection code expired before enrollment. Generate a new code on the agent.');
       final result = await pinned('POST', '/enroll', {'code': code.trim(), 'name': deviceName.trim(), 'csr': identity['csr']!});
+      if (expectedAgentId != null && result['agent_id'] != expectedAgentId) throw ApiException('Enrolled agent identity mismatch.');
       final device = object(result['device']);
       final profile = MachineProfile(id: result['agent_id']?.toString() ?? health['agent_id'].toString(), name: name.trim(), group: group.trim(), endpoint: origin.toString(),
-        certificate: result['certificate'], privateKey: identity['key']!, ca: result['ca_certificate'], fingerprint: pin, deviceId: device['id'], role: device['role'] ?? 'unknown');
+        certificate: result['certificate'], privateKey: identity['key']!, ca: result['ca_certificate'], fingerprint: pin,
+        deviceId: device['id'], role: device['role'] ?? 'unknown', relay: relay);
       // Parse and load certificates before admitting a profile to secure storage.
       X509Utils.x509CertificateFromPem(profile.certificate);
       X509Utils.x509CertificateFromPem(profile.ca);
       final probe = AgentApi(profile);
       try { await probe.call('GET', '/health'); } finally { probe.close(); }
       return profile;
-    } finally { client.close(force: true); }
+    } finally { transport?.close(); client.close(force: true); }
   }
 }

@@ -1,0 +1,19 @@
+# Keep ASGI/security pins aligned with agent/requirements.txt.
+fastapi==0.143.2
+starlette==1.8.0
+pydantic==2.14.1
+pydantic-core==2.50.1
+uvicorn==0.54.0
+websockets==15.0.1
+h11==0.16.0
+anyio==4.15.1
+annotated-types==0.8.0
+annotated-doc==0.0.5
+opentelemetry-api==1.45.1
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+idna==3.20
+click==8.5.0
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.11

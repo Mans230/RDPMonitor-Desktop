@@ -22,6 +22,9 @@ def main():
             from agent.service import verify_installation
             verify_installation()
             return 0
+        if command == 'setup':
+            from agent.setup import main as setup
+            return setup(args)
         if command == 'migrate':
             from agent.migration import main as migrate
             return migrate(args)
