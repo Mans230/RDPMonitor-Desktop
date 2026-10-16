@@ -15,6 +15,7 @@ import tempfile
 import time
 import unittest
 from contextlib import AsyncExitStack, closing
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -435,6 +436,58 @@ class RelaySecurityTests(unittest.IsolatedAsyncioTestCase):
         await self.start(production=True)
         response = await self.http.get("/health", headers={"X-Forwarded-Proto": "https"})
         self.assertEqual(response.status_code, 400)
+
+
+    async def test_pairing_lookup_is_rate_limited_per_source(self):
+        # The one unauthenticated endpoint must still be bounded: once a source
+        # exhausts its window a lookup is refused rather than served.
+        lookup_id = "a" * 64
+        statuses = [(await self.http.get(f"/api/v1/pairings/{lookup_id}")).status_code for _ in range(65)]
+        self.assertEqual(statuses[:60], [404] * 60)
+        self.assertEqual(statuses[60:], [429] * 5)
+        response = await self.http.get(f"/api/v1/pairings/{lookup_id}")
+        self.assertEqual(response.json(), {"error": "pairing_rate_limited"})
+
+    async def test_grant_listing_reads_without_a_write_lock(self):
+        agent = await self.register()
+        grant = await self.grant(agent)
+        listing = await self.http.get(f"/api/v1/agents/{agent['route_id']}/grants",
+                                      headers=authorization(self.admin_key))
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual([row["grant_id"] for row in listing.json()["grants"]], [grant["grant_id"]])
+        self.assertEqual((await self.http.get(f"/api/v1/agents/{uuid4()}/grants",
+                         headers=authorization(self.admin_key))).status_code, 404)
+
+    async def test_websocket_enforces_origin_when_a_browser_sends_one(self):
+        agent = await self.register()
+        path = f"/api/v1/agents/{agent['route_id']}/control"
+        with self.assertRaises(InvalidStatus) as error:
+            async with connect(self.ws_origin + path,
+                               additional_headers={**authorization(agent["agent_token"]),
+                                                   "Origin": "https://evil.example"},
+                               proxy=None, open_timeout=3, close_timeout=1):
+                self.fail("Expected a foreign browser origin to be rejected")
+        self.assertEqual(error.exception.response.status_code, 403)
+        # The exact first-party origin, and the no-Origin headers our own agent
+        # and desktop clients send, must still be admitted.
+        async with connect(self.ws_origin + path,
+                           additional_headers={**authorization(agent["agent_token"]), "Origin": self.origin},
+                           proxy=None, open_timeout=3, close_timeout=1):
+            pass
+
+    def test_limits_require_exactly_one_bound_per_field(self):
+        Limits()
+        with self.assertRaises(ValueError):
+            Limits(agents=0)
+        with self.assertRaises(ValueError):
+            Limits(agents=257)
+
+        @dataclass(frozen=True)
+        class Extended(Limits):
+            extra: int = 1
+
+        with self.assertRaises(ValueError):
+            Extended()
 
 
 if __name__ == "__main__":

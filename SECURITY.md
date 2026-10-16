@@ -4,6 +4,8 @@
 
 RDPMonitor Desktop uses a native Flutter client, an HTTPS gateway, a privileged resident Windows worker and a separate signed-in user session helper. There is no browser administration panel or Telegram transport to configure. The client runs as a normal user; closing it does not stop the worker's monitoring, protection, accepted jobs or backup schedules.
 
+The agent and the broker share exactly one module, `relay/protocol.py` (the invitation format and origin normalisation). The agent imports it from the vendored relay package, so that file is the only code the two roles have in common; neither can use the other's credentials or authority.
+
 The constrained gateway communicates with the worker through an ACL-protected local named pipe. The worker validates capabilities, roles and exact-parameter confirmations before privileged operations. Interactive actions require the appropriate signed-in session helper; there is no SYSTEM/session-zero desktop fallback. The deployment guide describes the intended service-account and filesystem isolation; installed SCM/boot acceptance remains a release gate.
 
 ## Enrollment and network exposure
@@ -37,6 +39,9 @@ The worker probes the configured reachability target (`ping_target`, default `1.
 - The job transport, durable events and audit records now share a single secret-name definition instead of three lists that could drift.
 - The update-availability comparison uses SHA-256 rather than MD5.
 - Backup pre/post hooks run with the worker identity. They can be disabled with the `hooks_enabled` backup setting, a command containing a NUL byte is refused rather than executed, and each run is logged by SHA-256 fingerprint instead of the command text, which may embed credentials.
+- The relay's only unauthenticated endpoint, `GET /api/v1/pairings/{lookup_id}`, is rate-limited per source address with a bounded tracking table, so an anonymous caller cannot drive durable storage without limit while the fragment holder still completes the first fetch.
+- The relay rejects a WebSocket handshake whose browser `Origin` header does not match the configured public origin. The first-party agent and desktop clients send no `Origin` and are unaffected.
+- Relay limits declare exactly one explicit bound per field, so a newly added limit cannot silently share or escape an existing ceiling.
 
 ## Unsigned prerelease and outstanding gates
 
