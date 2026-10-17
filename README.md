@@ -6,7 +6,7 @@ The client uses Flutter widgets, not a WebView. Telegram and the browser panel h
 
 **Windows preview · MIT open source · unsigned monitoring-only installer**
 
-[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.0-preview.3) · [Install and connect through your relay](docs/DESKTOP-DEPLOYMENT.md#install-anywhere-and-connect-with-a-code) · [Security](SECURITY.md)
+[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.0-preview.4) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
 
 ![Native Backups workspace with responsive command cards connected to a local read-only agent fixture](docs/images/desktop-overview.png)
 
@@ -27,23 +27,25 @@ See [feature coverage](docs/FEATURE-COVERAGE.md) for the disposition of all 87 d
 
 The normal-user desktop client connects over TLS with an individually enrolled certificate. A constrained gateway talks to the privileged worker through a local ACL-protected named pipe. The worker owns durable jobs, validates capabilities and confirmations, and executes the retained Windows/backup engines. A separate signed-in user helper performs interactive actions; there is no session-zero screenshot or SYSTEM desktop fallback.
 
-A local installation includes client and agent. Remote machines each need their own agent. A guest agent manages Windows inside its VM; provider/hypervisor power control and VM provisioning are not included.
+A local suite installation includes client and agent. The quick VM command installs a separate **agent-only** package: no desktop app on the guest. A guest agent manages Windows inside its VM; provider/hypervisor power control and VM provisioning are not included.
 
 For machines behind NAT or on different networks, the agent and desktop both connect outward to a self-hosted HTTPS relay. The relay forwards opaque desktop-to-agent TLS bytes; the existing agent certificates, roles, confirmations and revocation remain authoritative. No VM inbound management rule or VPN is required. See the [implementation and trust-boundary plan](docs/RELAY-INSTALLATION-PLAN.md).
 
-## Install anywhere and connect with a code
+## Install a VM with one CMD command
 
 An operator must first deploy the supplied relay with a domain and valid HTTPS. **This repository does not provide a publicly hosted relay.**
 
 1. On your operator PC, extract the Windows preview ZIP and run `client\rdpmonitor.exe`. Keep its adjacent runtime files.
 2. Open **Relay settings** from the connection menu. Save your relay's HTTPS origin and private administration key once; they go into OS-protected storage.
-3. Choose **Add machine**, enter its name and optional group, then choose **Create setup code**.
-4. Use **Copy installer link** to download Preview 3 on the Windows VM. Run setup, approve administrator elevation and the explicit unsigned-preview warning, then paste the single private VM setup code. The preview is **forced monitoring-only**.
-5. The desktop waits, verifies the encrypted agent identity and enrolls automatically. **No second code, VM address or manual fingerprint entry is required.** Close and reopen Add machine to resume its protected pending setup.
+3. Choose **Add machine**, enter its name and optional group, and create the installation command. Accept the explicit unsigned monitoring-only preview notice, then choose **Copy CMD command**.
+4. Inside the Windows VM, open **Command Prompt as Administrator** (CMD, not PowerShell), paste that one line and press Enter. No VM installer wizard, setup-code entry or second code is needed.
+5. Keep Add machine open. The desktop verifies the encrypted agent identity and enrolls automatically. No VM address or manual fingerprint entry is required. Close and reopen Add machine to resume its protected pending installation.
 
-The native setup installs the complete runtime and boot-time services with a loopback-only gateway and outbound relay connector. Reopen the same installer to generate a fresh code or repair that release; do not reuse a consumed installation invitation. Desktop exit does not stop the agent.
+The command downloads the complete background guest runtime, verifies the desktop-pinned SHA256, and silently installs boot-time worker/gateway services with a loopback-only listener and outward relay connection. It executes only the desktop's bundled public bootstrap code, not a downloaded script. No separate Python or Flutter installation is needed, and the operator desktop app is not installed on the guest. Normal CMD provisioning is always **monitoring-only/viewer**, including signed builds, and refuses an already installed machine rather than replacing its identity.
 
-The setup code carries independent registration and pairing capabilities. Only the registration token reaches the relay; the pairing key authenticates the VM's encrypted identity envelope locally. Setup codes belong only in native VM setup, never a browser, command line, issue or public screenshot. The ordinary installer download link is public. Clipboard history can retain copied secrets.
+**The copied command is private.** Its base64url environment value contains independent registration and pairing capabilities; encoding is not encryption. Only the registration token reaches the relay. The pairing key authenticates the VM's encrypted identity envelope locally. The secret is passed through process environment into an administrator/SYSTEM-protected exchange, not PowerShell/native installer arguments or download URLs. Paste into an existing CMD window—never pass the private line as `cmd /c` arguments or publish it. Clipboard and CMD history can retain it.
+
+For an already installed agent, use the matching native installer's advanced pairing/repair flow; do not rerun the fresh-machine command or reuse a consumed installation invitation. Desktop exit does not stop installed services.
 
 The installer is a preview, not proof of an accepted deployment. **Installed SCM identities, reboot/logoff and clean-VM repair/uninstall remain unvalidated on a disposable VM.** Use a disposable Windows VM first. This is not a signed production release; do not bypass the separate production signature checks.
 
@@ -139,7 +141,7 @@ flutter analyze
 
 Tests exercise policy, certificate/replay/revocation boundaries, durable jobs/revisions, encrypted persistence, upload isolation/integrity and backup/recovery errors without changing host firewall/accounts/power.
 
-Latest Windows checks: **187 backend tests and 25 client tests passed**, `flutter analyze` reported no issues, and the native Windows debug client built and ran.
+Latest Windows checks: **195 backend tests and 30 client tests passed**, including real CMD success/failure environment cleanup; `flutter analyze` reported no issues, and the native Windows debug client built and ran.
 
 The local integration smoke exercised the exact packaged worker and gateway executables over real named-pipe IPC, certificate enrollment, authenticated HTTPS telemetry/history, an overview job, duplicate-request identity, read-only denials and certificate revocation. The packaged hidden helper returned authenticated status for the signed-in session. IPC regressions cover OS-derived identity, concurrent clients, clean shutdown and protected worker-file ACLs. Snapshot reads use the persistent sampler; history projects bounded numeric measurements instead of repeating process inventories.
 
@@ -151,8 +153,10 @@ The relay flow was additionally exercised against the actual broker CLI and bund
 
 Preview 3 was exercised through native name/group entry, single-code creation, pending close/reopen, real broker registration and automatic pinned/mTLS enrollment without a return code. Actual disk telemetry, contract editing and certificate renewal retained exact dates/costs. Native captures verified two/three-column Backups cards, hidden/open sidebar and a narrow drawer. A deliberately failed final mTLS probe preserved the issued identity across dialog close/reopen and then saved it without another device issuance. A genuine pinned response that previously stayed pending beyond 58 seconds now timed out after 30 seconds.
 
+Preview 4 exercised the actual native **Prepare CMD command**, explicit consent and **Copy CMD command** controls. The copied line was 4,359 UTF-16 characters and contained no private capability in child arguments. Native close/reopen resumed the same protected setup; a real HTTPS/WSS broker and frozen Windows worker/gateway completed encrypted automatic viewer enrollment and displayed live disk data with the requested name/group. Wide and narrow command dialogs were inspected. Guest-only packaging succeeded without Flutter, frozen command import worked with an OS-only PATH, and real native silent preflight rejected missing mode/consent, malformed capabilities and retained identity. Actual HTTPS binary downloads exercised SHA256 rejection and production publisher rejection without preview fallback or cache residue.
 
-These were isolated local fixtures, not an installed SCM or public relay deployment. Numeric-loopback HTTP was enabled explicitly for the development broker; release clients and installers require HTTPS. Fixture provisioning used the native-verified service SID without registering a service. Container/Caddy/public HTTPS deployment, production publisher signing and clean-VM installation/reboot remain external acceptance gates.
+
+These were isolated local fixtures, not an installed SCM or public relay deployment. Earlier transport checks used explicit numeric-loopback HTTP; Preview 4 used a strict HTTPS fixture CA trusted only inside the development processes, without changing the Windows root store. Release clients and installers require valid HTTPS. Fixture provisioning used the native-verified service SID without registering a service. Container/Caddy/public HTTPS hosting, production publisher signing and clean-VM service installation/reboot remain external acceptance gates.
 
 ## Layout
 
@@ -160,7 +164,7 @@ These were isolated local fixtures, not an installed SCM or public relay deploym
 - `agent/` — contracts, worker runtime, versioned gateway, enrollment, storage, Windows/backup adapters, session helper and delivery.
 - `relay/` — bounded single-process ASGI broker, durable hashed transport credentials and encrypted invitation protocol.
 - `deploy/relay/` — Docker Compose/Caddy deployment; operator-owned DNS, HTTPS and administration key.
-- `installer/` — native Windows invitation, preview consent, repair and pairing wizard.
+- `installer/` — guest-only silent CMD installation plus advanced native preview consent, repair and pairing.
 - `rdp_monitor.py` — retained transport-independent Windows monitoring/protection engine; not a standalone bot entrypoint.
 - `backup/app/` — shared ZIP/restic/rclone/restore engines; no separate desktop GUI or Telegram daemon.
 - `scripts/` — service installation, signed build/update/rollback and legacy migration tooling.
@@ -170,4 +174,4 @@ These were isolated local fixtures, not an installed SCM or public relay deploym
 
 [MIT](LICENSE). Retain dependency and external-tool license notices when distributing packaged runtimes. Disk2vhd, restic, rclone and cloud-provider requirements are separate from the client license.
 
-This desktop project evolves [Mans230/RDPMonitor](https://github.com/Mans230/RDPMonitor) and retains its Windows monitoring/protection and backup engines. The bundled Geist typeface uses the [SIL Open Font License](https://github.com/Mans230/RDPMonitor-Desktop/blob/main/clients/app/assets/fonts/OFL.txt), separate from the project's MIT license; binary packages also include `GEIST-OFL.txt`.
+This desktop project evolves [Mans230/RDPMonitor](https://github.com/Mans230/RDPMonitor) and retains its Windows monitoring/protection and backup engines. The bundled Geist typeface uses the [SIL Open Font License](https://github.com/Mans230/RDPMonitor-Desktop/blob/main/clients/app/assets/fonts/OFL.txt), separate from the project's MIT license; desktop binary packages also include `GEIST-OFL.txt`. The guest-only package does not bundle the Flutter desktop or its typeface.

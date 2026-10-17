@@ -8,7 +8,8 @@ $common = Join-Path $PSScriptRoot 'deployment-common.ps1'
 Assert-Administrator
 $deploymentPath = Join-Path $DataRoot 'deployment.json'
 $previous = Get-Content -LiteralPath $deploymentPath -Raw | ConvertFrom-Json
-$manifest = Read-Release $Package $previous.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer')
+$component = if ($previous.PSObject.Properties.Name -contains 'component') { [string]$previous.component } else { 'suite' }
+$manifest = Read-Release $Package $previous.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer') -Component $component
 if ([version]$manifest.version -le [version]$previous.version) { throw 'Updates must increase version. A binary downgrade without its matching state snapshot is forbidden.' }
 if ([int]$previous.data_schema -lt [int]$manifest.min_data_schema -or [int]$previous.data_schema -gt [int]$manifest.max_data_schema -or [int]$manifest.api -ne [int]$previous.api) { throw 'Incompatible API/state schema; update refused before stopping any service.' }
 if ($VerifyOnly) { Write-Output "Verified signed coherent release $($manifest.version); current schema compatible."; exit 0 }
@@ -22,7 +23,7 @@ Set-ProtectedDirectory $recovery
 $destination = Join-Path $InstallRoot ('releases\' + $manifest.version)
 if (Test-Path -LiteralPath $destination) { throw 'Target release already exists. Refusing to overwrite a prior release.' }
 Copy-ProtectedRelease $Package $destination
-$manifest = Read-Release $destination $previous.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer')
+$manifest = Read-Release $destination $previous.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer') -Component $component
 $agent = Join-Path $destination 'agent\RDPMonitorAgent.exe'
 Invoke-Checked $agent @('verify-installation')
 $state = [ordered]@{ id=$updateId; state='stopping'; previous_version=$previous.version; target_version=$manifest.version; previous_release=$previous.release; target_release=$destination; snapshot=$recovery; started_utc=[DateTime]::UtcNow.ToString('o') }
@@ -53,7 +54,7 @@ try {
     # command must prove both worker and gateway are serving before committing.
     Wait-AgentReady $agent $next
     $state.state = 'committed'; $state.completed_utc = [DateTime]::UtcNow.ToString('o'); Save-UpdateState
-    Write-Output "Updated coherent client/agent release to $($manifest.version); protected rollback snapshot $recovery"
+    Write-Output "Updated coherent $component release to $($manifest.version); protected rollback snapshot $recovery"
 } catch {
     $failure = $_
     Stop-AgentServices

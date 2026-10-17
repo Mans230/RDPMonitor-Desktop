@@ -9,51 +9,78 @@ Run the client as the signed-in user. The agent's privileged worker and constrai
 ## Build prerequisites
 
 - Windows x64; Python 3.14 with the pinned `requirements.txt` environment.
-- Flutter with Dart **3.13.0 or newer within 3.x** and the committed `clients/app/pubspec.lock`. The bounded native WebSocket API requires this SDK minimum.
-- Visual Studio 2022 C++ build tools, Windows SDK and ATL; a short checkout path avoids native build path limits.
+- Flutter with Dart **3.13.0 or newer within 3.x** and the committed `clients/app/pubspec.lock`, for desktop builds only. Guest-only packaging does not invoke Flutter.
+- Visual Studio 2022 C++ build tools, Windows SDK and ATL for the native desktop; a short checkout path avoids native build path limits.
 - Windows SDK `signtool.exe` and a valid RSA code-signing certificate in the current user's certificate store, including the code-signing EKU and private key.
 - The matching licensed x64 `Microsoft.VC143.CRT` release redistributable directory and official Microsoft redistribution notice. The build copies these DLLs beside the client; do not use `debug_nonredist`.
 - External backup/imaging tools are separate dependencies. Configure approved HTTPS download URLs and independently verified SHA256 digests in the agent tooling operations. Missing tools must produce actionable errors, not silent fallback. Retain each redistributed tool's license and distribution conditions; Disk2vhd licensing is separate.
 
-From an appropriately provisioned build terminal:
+Build the guest first, then pin the final signed native guest executable into the desktop build. Set the publisher, timestamp and licensed runtime inputs below from your actual toolchain:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.0.0 `
-  -CertificateThumbprint $PublisherThumbprint `
-  -TimestampUrl $TimestampServiceHttpsUrl `
-  -VCRuntimeDirectory $LicensedX64CrtDirectory `
-  -VCRedistributionNoticeFile $MicrosoftRedistributionNotice `
-  -Python .\.venv\Scripts\python.exe
+$build = @{
+  Version = '1.0.0'; BuildNumber = 4
+  CertificateThumbprint = $PublisherThumbprint
+  TimestampUrl = $TimestampServiceHttpsUrl
+  VCRuntimeDirectory = $LicensedX64CrtDirectory
+  VCRedistributionNoticeFile = $MicrosoftRedistributionNotice
+  Python = '.\.venv\Scripts\python.exe'
+}
+.\scripts\build-release.ps1 @build -GuestOnly -Output '.\dist\guest'
+.\scripts\build-installer.ps1 -GuestOnly `
+  -Package '.\dist\guest\RDPMonitorGuest-1.0.0-windows-x64' `
+  -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl `
+  -Output '.\dist\guest\native'
+$GuestInstaller = '.\dist\guest\native\RDPMonitorGuest-1.0.0-windows-x64-setup.exe'
+$GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
+# Publish these exact bytes, then set GuestSetupHttpsUrl to their immutable HTTPS URL.
+.\scripts\build-release.ps1 @build -Output '.\dist\desktop' `
+  -GuestSetupUrl $GuestSetupHttpsUrl -GuestSetupSha256 $GuestSetupSha256 `
+  -GuestSetupMode production -GuestPublisherThumbprint $PublisherThumbprint
 ```
 
-The build bundles the agent runtime and native client, signs PE files and PowerShell scripts, verifies signatures, records dependency/license notices, and writes a signed file-inventory manifest plus ZIP/SHA256. Authenticate the publisher fingerprint independently before installing. A ZIP checksum obtained alongside an untrusted ZIP is not publisher authentication.
+The guest bundles the frozen Python agent/runtime, lifecycle scripts and dependency/Microsoft notices, but no `client` directory or desktop shortcut. Its signed inventory declares `component: guest`; the desktop suite declares `component: suite`. Component changes are rejected during install, repair, signed update and rollback. Guest and suite are not co-installed on one Windows installation.
+
+Production builds sign PE files and PowerShell scripts, verify signatures and write a signed file-inventory manifest plus ZIP/SHA256. The final native guest setup/uninstaller is signed separately before its executable digest is pinned. Production desktop builds require explicit production guest trust inputs; a missing/invalid override never falls back to an unsigned preview. Authenticate the publisher independently: a ZIP checksum alongside an untrusted ZIP is not publisher authentication.
 
 For a Build Tools installation, the CRT directory is typically `VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT` beneath its installation root; the redistribution notice is under `Licenses\1033\Redist.txt`. Authenticate and retain the toolchain's redistribution terms. End users do not need Visual Studio, Python or Flutter to run the packaged client/runtime.
 
-Build the native wizard around that complete authenticated package:
+Build the optional advanced suite wizard around the complete authenticated desktop package:
 
 ```powershell
 .\scripts\build-installer.ps1 -AcquireCompiler
-.\scripts\build-installer.ps1 -Package 'C:\Releases\RDPMonitor-1.0.0-windows-x64' `
+.\scripts\build-installer.ps1 -Package '.\dist\desktop\RDPMonitor-1.0.0-windows-x64' `
   -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl
 ```
 
 Compiler acquisition is separate from application installation. It checks the immutable official Inno Setup 7.1.0 asset SHA256 and its Windows Authenticode chain/current official publisher before executing the tool installer. Production setup and its embedded uninstaller are signed; no self-signed publisher or automatic unsigned fallback is created. Retain Inno's embedded notices and review its current commercial-use guidance for your organization.
 
-For an explicitly unsigned evaluation build, use the separate parameter set:
+For an explicitly unsigned evaluation build, use the separate parameter set and the same guest-first order:
 
 ```powershell
-.\scripts\build-release.ps1 -UnsignedPreview -Version 1.0.0 -BuildNumber 2 `
-  -VCRuntimeDirectory $LicensedX64CrtDirectory `
-  -VCRedistributionNoticeFile $MicrosoftRedistributionNotice `
-  -Python .\.venv\Scripts\python.exe
-.\scripts\build-installer.ps1 `
-  -Package '.\dist\RDPMonitor-1.0.0-windows-x64-UNSIGNED-PREVIEW' -UnsignedPreview
+$preview = @{
+  UnsignedPreview = $true; Version = '1.0.0'; BuildNumber = 4
+  VCRuntimeDirectory = $LicensedX64CrtDirectory
+  VCRedistributionNoticeFile = $MicrosoftRedistributionNotice
+  Python = '.\.venv\Scripts\python.exe'
+}
+.\scripts\build-release.ps1 @preview -GuestOnly -Output '.\dist\preview-guest'
+.\scripts\build-installer.ps1 -GuestOnly -UnsignedPreview `
+  -Package '.\dist\preview-guest\RDPMonitorGuest-1.0.0-windows-x64-UNSIGNED-PREVIEW' `
+  -Output '.\dist\preview-guest\native'
+$GuestInstaller = '.\dist\preview-guest\native\RDPMonitorGuest-1.0.0-windows-x64-UNSIGNED-PREVIEW-setup.exe'
+$GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
+# Publish these exact bytes and set GuestSetupHttpsUrl before building their desktop.
+.\scripts\build-release.ps1 @preview -Output '.\dist\preview-desktop' `
+  -GuestSetupUrl $GuestSetupHttpsUrl -GuestSetupSha256 $GuestSetupSha256 `
+  -GuestSetupMode unsigned-preview
 ```
 
-This builds the complete runtime, dependency/font/Microsoft notices, an explicitly unsigned inventory, ZIP/checksum and then a monitoring-only setup executable. Unsigned checksums establish file integrity, not publisher authenticity. The preview setup cannot enable administration, protection or schedules; use a disposable Windows VM first. The developer/source agent CLI is separate from this installed preview policy: source evaluation must explicitly use `--read-only`.
+Checked-in desktop defaults pin the official Preview 4 guest asset. Rebuilt native installers need not be byte-identical: publish your rebuilt guest under your own immutable HTTPS URL and override URL/digest/mode together. The guest download URL must contain no credentials, query, fragment or CMD metacharacters. The builder enforces CMD's 8191-character limit; a very long relay origin or release URL fails explicitly.
 
-## Install anywhere and connect with a code
+Unsigned checksums establish integrity, not publisher authenticity. Preview setup requires explicit evaluation consent and cannot enable administration, protection or schedules; use a disposable Windows VM first. The source agent CLI is separate from installed preview policy: source evaluation must explicitly use `--read-only`.
+
+## Install a VM with one CMD command
 
 ### One-time relay deployment
 
@@ -78,23 +105,25 @@ For non-container deployments, install `relay/requirements.txt`, set private `RD
 ### Operator desktop and VM setup
 
 1. Run the native desktop as the operator. Open **Relay settings**, enter the HTTPS origin and administration key, and choose **Save & load routes**. Both settings are held in OS-protected storage.
-2. Choose **Add machine**, enter its name and optional group, then **Create setup code**. A single pending installation is retained in OS-protected storage; close/reopen Add machine to resume it.
-3. Choose **Copy installer link** and download the matching Preview 3 setup on the Windows VM. Run it, approve administrator elevation and the unsigned-preview notice, then paste the private setup code. Preview 2 installers do not understand the new setup-code format. Release installers require valid HTTPS; no remote HTTP or certificate bypass is available.
-4. Monitoring-only is selected by default. The unsigned preview forces it and a viewer approval; signed production setup can enable administration only after explicit local consent.
-5. The desktop polls for the encrypted VM approval, verifies its pinned identity, enrolls and probes ordinary mTLS automatically. **Do not copy another code back.** The setup completion page retains a manual recovery option for advanced use.
+2. Choose **Add machine**, enter its name and optional group, and create its installation command. A single pending installation is retained in OS-protected storage; close/reopen Add machine to resume it.
+3. Approve the explicit unsigned monitoring-only evaluation notice when applicable, then choose **Copy CMD command**. Inside the VM open **Command Prompt as Administrator**—CMD, not PowerShell—paste the one line and press Enter.
+4. The bundled public bootstrap downloads the native **guest-only** installer over validated HTTPS into a unique administrator/SYSTEM-protected cache, checks the app-pinned SHA256 and production Authenticode publisher when applicable, then installs silently. No VM wizard, separate setup-code entry or desktop app on the guest is needed. No downloaded script is executed.
+5. The desktop polls for encrypted VM approval, verifies its pinned identity, enrolls and probes ordinary mTLS automatically. **Do not copy another code back.** Normal CMD provisioning always forces monitoring-only/viewer, even in signed builds. Administrative access remains an advanced signed interactive flow requiring separate affirmative local consent.
 
 The VM gateway binds `127.0.0.1:8443`; the constrained gateway connects outward using HTTPS/WSS. Neither a public VM address, management port forwarding nor a VPN is required. Existing Windows/RDP firewall protection is not relaxed. Each Windows VM needs its own installation and persistent identity; copying DPAPI state to another VM is not enrollment. Linux agents and hypervisor provisioning/power-on are not implemented.
 
-Keep setup and manual connection codes private; they are copy/paste URIs, not browser links or globally resolvable six-digit PINs. A setup URI carries two independent canonical 256-bit capabilities in its fragment: the one-use relay installation token and a desktop-generated pairing key. The VM sends only the installation token during registration, then publishes the existing AES-GCM envelope using the independent key. Desktop lookup sends only SHA256(key); the broker cannot decrypt/replace the identity or authorize Windows operations. The separate installer download link contains no capability and can be opened normally in a browser.
+**Treat the copied command like a password.** It carries a base64url-encoded setup URI in an environment value; encoding is not encryption. The URI contains independent one-use relay registration and desktop pairing capabilities. Only the installation token reaches the broker; the VM publishes an AES-GCM envelope under the independent key and desktop lookup sends only SHA256(key). Never navigate to it in a browser, share it, or put the entire private line in `cmd /c` process arguments. Clipboard and interactive CMD history can retain it.
 
-Reopen the same installer and choose **Pair installed agent** to generate a new connection code; no consumed installation invitation is reused. **Repair the same release** preserves the machine identity, enrolled devices, routing, data and deployment mode. Version/trust changes use the signed update lifecycle, not an unsigned repair path. A failed post-install helper displays recovery instructions and setup exit code `42`, rather than claiming a completed connection; the protected runtime remains available for repair.
+Only trusted public bootstrap code appears in PowerShell arguments. Native setup consumes the private environment value into `%ProgramData%\RDPMonitor\setup\<random-session>` before staging files, clears the parent environment before later helpers, and cleans its protected exchange on exit. The CMD caller clears all generated environment values on either branch. CMD returns `0` on success and `1` on failure; when native setup reports a failure, its exact exit code is printed. There is no certificate bypass, downloaded mutable script or production-to-preview fallback.
+
+The command is for **fresh provisioning**, not repair: retained identity/deployment/relay state or registered services cause rejection rather than silently replacing an existing machine. For advanced recovery, reopen the matching native guest installer and choose **Pair installed agent** or **Repair the same release**. Pairing generates a fresh private manual connection code without reusing a consumed invitation; same-release repair preserves identity, enrolled devices, routing, data and deployment mode. Version/trust/component changes are not an unsigned repair path. A failed post-install helper returns native setup code `42` instead of claiming a completed connection; use the retained protected runtime for recovery.
 
 Normal installation invitations last 15 minutes. Waiting is serialized at three-second intervals and stops after the installation window plus at most five minutes for a VM that already registered. Closing the waiting dialog keeps its intent/key in protected storage; discard explicitly removes only that local pending state, not a remote invitation, route or certificate. Enrollment is not silently replayed after an ambiguous one-use POST. Once a device identity is received, both normal setup and advanced recovery checkpoint it before the final mTLS probe; retry verifies/saves that identity instead of issuing another certificate. Enrollment response bodies are bounded to 128 KiB and a 30-second read deadline.
 
 Use a fresh disposable VM for this unsigned evaluation payload. **Repair means the same published release**, not an unsigned cross-preview/version upgrade or trust migration. Existing installed agents can still generate a fresh manual code through Pair installed agent.
 
 
-The private exchange directory is `%ProgramData%\RDPMonitor\setup\<random-session>`. It is protected before any invitation/result is written, and cleaned when setup exits. No invitation, connection code or routing token is placed in process arguments. Worker state remains SYSTEM/Administrators-only; the gateway receives noninheriting root descriptor/traverse rights plus read access to its own TLS/routing inputs, not the worker database or CA key.
+The private exchange directory is protected before any invitation/result is written, and cleaned when setup exits. No invitation, connection code or routing token is placed in PowerShell/native installer process arguments; the pasted CMD line itself remains private history. Worker state remains SYSTEM/Administrators-only; the gateway receives noninheriting root descriptor/traverse rights plus read access to its own TLS/routing inputs, not the worker database or CA key.
 
 Use **Devices & access** to revoke a lost Windows device certificate. **Relay settings → Revoke route** instead permanently disconnects that installation's transport credentials/grants; it does not uninstall the agent or revoke its Windows device certificates. Identity tombstones prevent takeover/re-registration of that same agent ID. Do not revoke a route as a temporary pause. There is no automatic identity reset or cross-relay migration.
 
@@ -233,7 +262,7 @@ Current automated checks and local smoke scenarios do not replace deployment acc
 | Updates | Signed fresh install, migration under original account, update failure, exact-state rollback, repair and removal preserving data/policy |
 | Desktop | Actual installed UI, keyboard/accessibility, offline/reconnect, confirmations, artifact transfer, startup and notification-area behavior |
 | Relay | Public Caddy HTTPS/WSS, no VM ingress, offline/reconnect and bounded slow-reader cleanup, expiry/reuse, misrouting, real transfer and live device/route revocation |
-| Native setup | Fresh VM invitation/code completion, rejected/expired invitation, failure exit `42`, same-release repair/pairing, uninstall preserving policy/data and signed production publisher acceptance |
+| Native setup | One Administrator CMD line on a fresh VM; guest-only payload/no wizard; valid download/publisher/hash; automatic monitoring-only enrollment; expired/malformed/retained identity rejection; failure exit `42`; same-release repair/pairing; uninstall preserving policy/data; signed production publisher acceptance |
 | Imaging | Real complete image file set, interruption/recovery, and actual VM boot where supported; file creation alone is insufficient |
 | Mobile | macOS/Xcode/iOS provisioning, production Android signing, real-device lifecycle/network changes, token registration and provider delivery |
 

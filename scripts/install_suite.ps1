@@ -73,7 +73,8 @@ if ($Repair) {
     if (-not (Test-Path -LiteralPath $knownDeployment)) { throw 'No installed deployment to repair.' }
     $deployment = Get-Content -LiteralPath $knownDeployment -Raw | ConvertFrom-Json
     $Package = $deployment.release
-    $release = Read-Release $Package $deployment.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer')
+    $component = if ($deployment.PSObject.Properties.Name -contains 'component') { [string]$deployment.component } else { 'suite' }
+    $release = Read-Release $Package $deployment.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer') -Component $component
     Stop-AgentServices
     Set-ProtectedDirectory $InstallRoot -Code
     Set-ProtectedDirectory $DataRoot
@@ -122,7 +123,7 @@ $agent = Join-Path $destination 'agent\RDPMonitorAgent.exe'
 Invoke-Checked $agent @('verify-installation')
 if ($MigrateFrom) { Invoke-Checked $agent @('migrate','--source',$MigrateFrom,'--data-dir',$DataRoot,'--original-account',$OriginalAccount) }
 Set-ProtectedDirectory $DataRoot
-$deployment = [ordered]@{ version=$release.version; release=$destination; publisher_thumbprint=$PublisherThumbprint.Replace(' ','').ToUpperInvariant(); data_schema=[int]$release.data_schema; api=1; host=$ListenAddress; port=$Port; scope=$Scope; remote_addresses=@($RemoteAddress); interfaces=@($InterfaceAlias); installed_utc=[DateTime]::UtcNow.ToString('o') }
+$deployment = [ordered]@{ version=$release.version; component='suite'; release=$destination; publisher_thumbprint=$PublisherThumbprint.Replace(' ','').ToUpperInvariant(); data_schema=[int]$release.data_schema; api=1; host=$ListenAddress; port=$Port; scope=$Scope; remote_addresses=@($RemoteAddress); interfaces=@($InterfaceAlias); installed_utc=[DateTime]::UtcNow.ToString('o') }
 Save-Deployment $deployment
 Invoke-Checked $agent @('service-register')
 if ($Scope -eq 'Private') {

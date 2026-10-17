@@ -4,6 +4,7 @@ param(
     [string]$ISCC,
     [switch]$AcquireCompiler,
     [switch]$UnsignedPreview,
+    [switch]$GuestOnly,
     [string]$CertificateThumbprint,
     [string]$TimestampUrl,
     [string]$SignTool = 'signtool.exe',
@@ -47,7 +48,10 @@ if (-not $ISCC) {
     else { $ISCC = (Get-Command 'ISCC.exe' -ErrorAction Stop).Source }
 }
 Get-Command $ISCC -ErrorAction Stop | Out-Null
-foreach ($required in @('agent\RDPMonitorAgent.exe','client\rdpmonitor.exe','scripts\deployment-common.ps1','scripts\install_suite.ps1','scripts\update-agent.ps1','scripts\start-session-helper.ps1')) {
+$requiredFiles = @('agent\RDPMonitorAgent.exe','scripts\deployment-common.ps1','scripts\install_suite.ps1','scripts\update-agent.ps1','scripts\start-session-helper.ps1')
+if (-not $GuestOnly) { $requiredFiles += 'client\rdpmonitor.exe' }
+if ($GuestOnly -and (Test-Path -LiteralPath (Join-Path $Package 'client'))) { throw 'Guest input must not contain a client payload.' }
+foreach ($required in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $Package $required) -PathType Leaf)) { throw "Incomplete packaged runtime: $required" }
 }
 # The complete one-directory Python and Flutter runtimes must already be present.
@@ -56,6 +60,13 @@ if (-not (Test-Path -LiteralPath (Join-Path $Package 'agent\runtime') -PathType 
 foreach ($item in @(Get-Item -LiteralPath $Package) + @(Get-ChildItem -LiteralPath $Package -Recurse -Force)) {
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse points cannot be packaged.' }
 }
+$manifestPath = Join-Path $Package 'release.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Packaged release.json is required.' }
+$metadata = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$component = 'suite'
+if ($metadata.PSObject.Properties.Name -contains 'component') { $component = [string]$metadata.component }
+$expectedComponent = if ($GuestOnly) { 'guest' } else { 'suite' }
+if ($component -cne $expectedComponent) { throw 'Package component does not match the explicit installer build mode.' }
 $stage = $Package
 $thumbprint = ''
 if ($UnsignedPreview) {
@@ -65,7 +76,8 @@ if ($UnsignedPreview) {
     $metadata = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $version = [string]$metadata.version
     if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Preview version must be numeric major.minor.patch.' }
-    $stage = Join-Path $Output ('preview-payload-' + $version)
+    $previewStageName = if ($GuestOnly) { 'preview-guest-payload-' + $version } else { 'preview-payload-' + $version }
+    $stage = Join-Path $Output $previewStageName
     if (Test-Path -LiteralPath $stage) { throw 'Preview staging directory already exists; use a fresh output directory.' }
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
     Copy-Item -Path (Join-Path $Package '*') -Destination $stage -Recurse -Force
@@ -76,7 +88,7 @@ if ($UnsignedPreview) {
         if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse points cannot be packaged.' }
         $files += [ordered]@{ path=$file.FullName.Substring($stage.Length).TrimStart('\').Replace('\','/'); size=$file.Length; sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
     }
-    $preview = [ordered]@{ format=1; version=$version; platform='windows-x64'; api=1; data_schema=[int]$metadata.data_schema; unsigned_preview=$true; read_only=$true; files=$files }
+    $preview = [ordered]@{ format=1; version=$version; component=$component; platform='windows-x64'; api=1; data_schema=[int]$metadata.data_schema; unsigned_preview=$true; read_only=$true; files=$files }
     [IO.File]::WriteAllText((Join-Path $stage 'preview.json'),($preview | ConvertTo-Json -Depth 12),(New-Object Text.UTF8Encoding($false)))
 } else {
     if (-not $CertificateThumbprint -or $TimestampUrl -notmatch '^https://') { throw 'Production requires the real publisher thumbprint/private key and HTTPS RFC3161 timestamp service. Use -UnsignedPreview only for an explicitly labeled monitoring-only preview.' }
@@ -88,20 +100,22 @@ if ($UnsignedPreview) {
     $signature = Get-AuthenticodeSignature -LiteralPath $helper
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $thumbprint) { throw 'Production lifecycle helper is not authenticated by the selected publisher.' }
     . $helper
-    $metadata = Read-Release $Package $thumbprint ''
+    $metadata = Read-Release $Package $thumbprint '' -Component $expectedComponent
     $version = $metadata.version
 }
 New-Item -ItemType Directory -Path $Output -Force | Out-Null
 $arguments = @("/DPackageDir=$stage", "/DReleaseVersion=$version", "/DOutputDir=$Output", "/DPublisherThumbprint=$thumbprint")
+if ($GuestOnly) { $arguments += '/DGuestOnly' }
+$artifactPrefix = if ($GuestOnly) { 'RDPMonitorGuest-' } else { 'RDPMonitor-' }
 if ($UnsignedPreview) {
     $arguments += '/DUnsignedPreview'
-    $artifact = Join-Path $Output ('RDPMonitor-' + $version + '-windows-x64-UNSIGNED-PREVIEW-setup.exe')
+    $artifact = Join-Path $Output ($artifactPrefix + $version + '-windows-x64-UNSIGNED-PREVIEW-setup.exe')
 } else {
     # ISCC signs the embedded uninstaller as well as the outer setup. Credentials
     # stay in the Windows certificate provider; no PFX password enters argv.
     $signCommand = '"' + $SignTool + '" sign /sha1 ' + $thumbprint + ' /fd SHA256 /tr "' + $TimestampUrl + '" /td SHA256 $f'
     $arguments += @('/DProductionSigned', ('/Spublisher=' + $signCommand))
-    $artifact = Join-Path $Output ('RDPMonitor-' + $version + '-windows-x64-setup.exe')
+    $artifact = Join-Path $Output ($artifactPrefix + $version + '-windows-x64-setup.exe')
 }
 $arguments += Join-Path $Root 'installer\RDPMonitor.iss'
 Run $ISCC $arguments

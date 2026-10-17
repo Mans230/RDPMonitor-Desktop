@@ -1,7 +1,7 @@
 name: rdpmonitor
 description: Native RDPMonitor machine management client.
 publish_to: none
-version: 1.0.0+3
+version: 1.0.0+4
 environment:
   sdk: ^3.13.0
 dependencies:
@@ -22,6 +22,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/fonts/OFL.txt
+    - assets/guest-bootstrap.ps1
   fonts:
     - family: Geist
       fonts:

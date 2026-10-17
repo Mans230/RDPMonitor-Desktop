@@ -27,5 +27,5 @@ analysis = Analysis([str(root / 'scripts' / 'agent_entry.py')], pathex=[str(root
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name='RDPMonitorAgent',
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
-          console=True, contents_directory='runtime')
+          console=True, hide_console='hide-early', contents_directory='runtime')
 app = COLLECT(exe, analysis.binaries, analysis.datas, strip=False, upx=False, name='RDPMonitorAgent')
