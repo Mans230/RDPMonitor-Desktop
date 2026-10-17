@@ -69,13 +69,6 @@ class EditableConfigTests(unittest.TestCase):
         self.assertNotIn("telegram_token_enc", value)
 
 
-class UpdateHashTests(unittest.TestCase):
-    def test_update_comparison_uses_sha256(self):
-        source = (ROOT / "rdp_monitor.py").read_text(encoding="utf-8")
-        self.assertIn("hashlib.sha256(r.content).hexdigest()", source)
-        self.assertIn("hashlib.sha256(f.read()).hexdigest()", source)
-        self.assertNotIn("hashlib.md5(", source)
-
 
 class BackupHookGuardTests(unittest.TestCase):
     """The backup pre/post hooks run with the worker identity, so an operator

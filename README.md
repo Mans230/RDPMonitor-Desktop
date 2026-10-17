@@ -6,13 +6,13 @@ The client uses Flutter widgets, not a WebView. Telegram and the browser panel h
 
 **Windows preview · MIT open source · unsigned monitoring-only installer**
 
-[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.1-preview.6) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
+[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.2-preview.1) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
 
 ![Native monochrome Backups workspace connected to a temporary local read-only verification agent](docs/images/desktop-overview.png)
 
 The native Flutter console follows the supplied black-and-white design: compact bordered panels, system typography, grouped command rows, semantic status colors and responsive navigation. Light and dark themes retain the same hierarchy. Metrics and capabilities come from the real agent, not prototype sample data or a browser wrapper.
 
-Preview 6 includes the native console redesign, direct desktop-key-bound VM installation and corrected light/dark filter-label contrast. It uses the unchanged, pinned Preview 5 guest installer.
+1.0.2 Preview 1 corrects Windows error **1057** when registering the gateway's virtual service account. It retains the native console redesign, direct desktop-key-bound VM setup and readable light/dark controls, and pins its matching corrected guest installer. Earlier previews can leave a stopped worker without a gateway; do not rerun a fresh-machine command over that retained state.
 
 ## What it manages
 
@@ -49,7 +49,7 @@ The command downloads the complete **guest-only** runtime over HTTPS, verifies i
 
 For an already installed agent or an expired installed setup, use the matching native installer's **Pair installed agent** local-recovery flow and the desktop's **Pair installed agent (direct HTTPS)** action. Do not rerun a fresh-machine command. A saved identity with pending acknowledgement can resume even after the installation window expires; retries neither issue another certificate nor duplicate/drop the saved machine. Desktop exit does not stop installed services.
 
-The installer is a preview, not proof of an accepted deployment. **Installed SCM identities, reboot/logoff and clean-VM repair/uninstall remain unvalidated on a disposable VM.** Use a disposable Windows VM first. This is not a signed production release; do not bypass the separate production signature checks.
+The installer is a preview, not proof of an accepted deployment. Windows SCM creation and existing-service account correction were exercised with isolated, never-started service fixtures. **Full installed service startup/enrollment, reboot/logoff and clean-VM repair/uninstall acceptance remain unvalidated.** A real VM test of the earlier guest exposed the registration defect corrected here, not a completed deployment. Use a fresh disposable Windows VM first. This is not a signed production release; do not bypass the separate production signature checks.
 
 ### Fleet workspace
 

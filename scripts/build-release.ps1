@@ -10,7 +10,7 @@ param(
     [string]$Python = 'python.exe',
     [string]$Flutter = 'flutter.bat',
     [string]$SignTool = 'signtool.exe',
-    [int]$BuildNumber = 6,
+    [int]$BuildNumber = 7,
     [int]$DataSchema = 1,
     [int]$MinimumDataSchema = 1,
     [int]$MaximumDataSchema = 1,

@@ -123,3 +123,11 @@ that architectural limitation is documented rather than hidden.
 - Native light/dark Machines and Activity surfaces were exercised after reproducing the blank labels in the packaged Preview 5 desktop. Direct-installation security and the immutable Preview 5 guest URL/SHA256 remain unchanged.
 - Desktop build number is 6. Preview 5 assets remain published unchanged; this is a separate corrected desktop release, not a silent asset replacement.
 
+## 1.0.2 Preview 1 — Windows gateway registration
+
+- Fixed Windows SCM error 1057 while creating the constrained gateway virtual account: native creation and reconfiguration now pass a NULL password for `NT SERVICE\RDPMonitorGateway`, not an empty string. LocalSystem worker registration keeps its existing empty-password behavior.
+- A real VM investigation found a stopped, fully configured worker and no gateway. An isolated Windows API probe reproduced empty-string rejection and NULL success; the native SCM regression exercises fresh creation and correction of an existing gateway account with the real protected-tree verifier enabled. Temporary services are never started and are removed with their protected fixtures.
+- Removed an implementation-text SHA256 test; it did not exercise update-integrity behavior.
+- Advanced the numeric package version to 1.0.2/build 7 and pinned matching new guest bytes in the desktop. Earlier immutable release assets are not replaced. Retained earlier-preview installations are not fresh-install targets or implicit same-release upgrades.
+- Full installed service startup/enrollment on a clean VM, reboot/logoff, repair/uninstall, provider routing and production signing remain separate acceptance gates.
+

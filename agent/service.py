@@ -162,23 +162,24 @@ def register_services(executable: Path) -> None:
     verify_installation(executable.parent)
     scm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_ALL_ACCESS)
     try:
-        for name, mode, account, dependencies in (
-            (WORKER, 'worker', 'LocalSystem', []),
-            (GATEWAY, 'gateway', f'NT SERVICE\\{GATEWAY}', [WORKER]),
+        # Windows manages virtual-account passwords; SCM requires NULL, not ''.
+        for name, mode, account, password, dependencies in (
+            (WORKER, 'worker', 'LocalSystem', '', []),
+            (GATEWAY, 'gateway', f'NT SERVICE\\{GATEWAY}', None, [WORKER]),
         ):
             command = f'"{executable}" service-dispatch {mode}'
             try:
                 handle = win32service.OpenService(scm, name, win32service.SERVICE_ALL_ACCESS)
                 win32service.ChangeServiceConfig(handle, win32service.SERVICE_WIN32_OWN_PROCESS,
                     win32service.SERVICE_AUTO_START, win32service.SERVICE_ERROR_NORMAL, command,
-                    None, 0, dependencies, account, '', None)
+                    None, 0, dependencies, account, password, None)
             except win32service.error as exc:
                 if exc.winerror != 1060:
                     raise
                 handle = win32service.CreateService(scm, name, f'RDPMonitor {mode}',
                     win32service.SERVICE_ALL_ACCESS, win32service.SERVICE_WIN32_OWN_PROCESS,
                     win32service.SERVICE_AUTO_START, win32service.SERVICE_ERROR_NORMAL,
-                    command, None, 0, dependencies, account, '')
+                    command, None, 0, dependencies, account, password)
             try:
                 win32service.ChangeServiceConfig2(handle, win32service.SERVICE_CONFIG_SERVICE_SID_INFO,
                                                 win32service.SERVICE_SID_TYPE_UNRESTRICTED)

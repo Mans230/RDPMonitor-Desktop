@@ -19,7 +19,7 @@ Build the guest first, then pin the final signed native guest executable into th
 
 ```powershell
 $build = @{
-  Version = '1.0.1'; BuildNumber = 6
+  Version = '1.0.2'; BuildNumber = 7
   CertificateThumbprint = $PublisherThumbprint
   TimestampUrl = $TimestampServiceHttpsUrl
   VCRuntimeDirectory = $LicensedX64CrtDirectory
@@ -28,10 +28,10 @@ $build = @{
 }
 .\scripts\build-release.ps1 @build -GuestOnly -Output '.\dist\guest'
 .\scripts\build-installer.ps1 -GuestOnly `
-  -Package '.\dist\guest\RDPMonitorGuest-1.0.1-windows-x64' `
+  -Package '.\dist\guest\RDPMonitorGuest-1.0.2-windows-x64' `
   -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl `
   -Output '.\dist\guest\native'
-$GuestInstaller = '.\dist\guest\native\RDPMonitorGuest-1.0.1-windows-x64-setup.exe'
+$GuestInstaller = '.\dist\guest\native\RDPMonitorGuest-1.0.2-windows-x64-setup.exe'
 $GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
 # Publish these exact bytes, then set GuestSetupHttpsUrl to their immutable HTTPS URL.
 .\scripts\build-release.ps1 @build -Output '.\dist\desktop' `
@@ -49,7 +49,7 @@ Build the optional advanced suite wizard around the complete authenticated deskt
 
 ```powershell
 .\scripts\build-installer.ps1 -AcquireCompiler
-.\scripts\build-installer.ps1 -Package '.\dist\desktop\RDPMonitor-1.0.1-windows-x64' `
+.\scripts\build-installer.ps1 -Package '.\dist\desktop\RDPMonitor-1.0.2-windows-x64' `
   -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl
 ```
 
@@ -59,16 +59,16 @@ For an explicitly unsigned evaluation build, use the separate parameter set and 
 
 ```powershell
 $preview = @{
-  UnsignedPreview = $true; Version = '1.0.1'; BuildNumber = 6
+  UnsignedPreview = $true; Version = '1.0.2'; BuildNumber = 7
   VCRuntimeDirectory = $LicensedX64CrtDirectory
   VCRedistributionNoticeFile = $MicrosoftRedistributionNotice
   Python = '.\.venv\Scripts\python.exe'
 }
 .\scripts\build-release.ps1 @preview -GuestOnly -Output '.\dist\preview-guest'
 .\scripts\build-installer.ps1 -GuestOnly -UnsignedPreview `
-  -Package '.\dist\preview-guest\RDPMonitorGuest-1.0.1-windows-x64-UNSIGNED-PREVIEW' `
+  -Package '.\dist\preview-guest\RDPMonitorGuest-1.0.2-windows-x64-UNSIGNED-PREVIEW' `
   -Output '.\dist\preview-guest\native'
-$GuestInstaller = '.\dist\preview-guest\native\RDPMonitorGuest-1.0.1-windows-x64-UNSIGNED-PREVIEW-setup.exe'
+$GuestInstaller = '.\dist\preview-guest\native\RDPMonitorGuest-1.0.2-windows-x64-UNSIGNED-PREVIEW-setup.exe'
 $GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
 # Publish these exact bytes and set GuestSetupHttpsUrl before building their desktop.
 .\scripts\build-release.ps1 @preview -Output '.\dist\preview-desktop' `
@@ -76,7 +76,7 @@ $GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
   -GuestSetupMode unsigned-preview -GuestSetupProtocol 2
 ```
 
-Preview 6 desktop defaults pin the unchanged official **Preview 5 guest** asset and secure direct setup protocol **2**. Rebuilt installers need not be byte-identical: publish your own exact guest bytes under an immutable HTTPS URL and override URL/digest/mode/protocol together. A protocol-1 guest cannot provision direct setup, so command copying fails closed rather than downloading the old relay-only guest. Download URLs must contain no credentials, query, fragment or CMD metacharacters. Commands above CMD's 8191-character limit fail explicitly.
+1.0.2 Preview 1 desktop defaults pin its matching corrected **1.0.2 Preview 1 guest** asset and secure direct setup protocol **2**. Rebuilt installers need not be byte-identical: publish your own exact guest bytes under an immutable HTTPS URL and override URL/digest/mode/protocol together. A protocol-1 guest cannot provision direct setup, so command copying fails closed rather than downloading the old relay-only guest. Download URLs must contain no credentials, query, fragment or CMD metacharacters. Commands above CMD's 8191-character limit fail explicitly.
 
 Unsigned checksums establish integrity, not publisher authenticity. Preview setup requires explicit evaluation consent and cannot enable administration, protection or schedules; use a disposable Windows VM first. The source agent CLI is separate from installed preview policy: source evaluation must explicitly use `--read-only`.
 
@@ -97,6 +97,8 @@ The command contains the initial VM transport private key, public desktop CSR an
 Close/reopen Add machine to resume its protected waiting/issued/saved state. A failed protected probe reuses the issued certificate. A storage write that committed before reporting failure is reconciled into the live fleet on retry, preserving saved display/contract metadata and one identity. A saved profile with failed acknowledgement remains usable and can finish acknowledgement after the setup deadline. Discard removes only local pending state; it does not revoke a remote device or uninstall an agent.
 
 The command is **fresh-install-only**. Retained/partial identity, services or deployment state are not replaced. If a VM was installed but its unclaimed bootstrap expired, use the matching native guest installer's **Pair installed agent**, then the desktop's **Pair installed agent (direct HTTPS)** and locally verified endpoint/fingerprint/code. This is explicit local recovery, not another fresh command. Same-release repair preserves identity and direct scope; repair is not a cross-preview upgrade. Keep provider console access for first installation.
+
+**Earlier-preview partial installations:** Windows requires a NULL password for `NT SERVICE\<ServiceName>` virtual accounts. Earlier guests passed an empty string and can leave `RDPMonitorWorker` registered/stopped with no `RDPMonitorGateway` (SCM error 1060). Version 1.0.2 fixes fresh and existing-service registration; a real Windows SCM regression exercises both account transitions without starting services. This does not authorize replacing an older preview or deleting its retained identity. Preserve guest state and originating desktop keys. Use a fresh disposable VM for the new version, or explicitly approve a separate recovery/reset plan; do not treat another fresh CMD command or a cross-preview installer as same-release repair.
 
 ### Optional relay — one-time deployment
 
