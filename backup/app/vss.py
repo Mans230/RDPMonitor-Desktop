@@ -12,6 +12,7 @@ On the next run, the tool suddenly stopped before being deleted.
 
 import os
 import json
+import re
 import subprocess
 
 from i18n import tr
@@ -45,11 +46,28 @@ def _save_pending(ids):
         pass
 
 
+def _volume_literal(volume):
+    """A drive like 'C:\\' — reject anything else before it reaches PowerShell."""
+    text = str(volume)
+    if not re.fullmatch(r"[A-Za-z]:\\?", text):
+        raise ValueError(f"Unsupported volume: {text!r}")
+    return text
+
+
+def _shadow_literal(shadow_id):
+    """A WMI shadow ID like '{GUID}' — reject anything else before it reaches PowerShell."""
+    text = str(shadow_id)
+    if not re.fullmatch(r"\{[0-9A-Fa-f-]{36}\}", text):
+        raise ValueError(f"Unsupported shadow id: {text!r}")
+    return text
+
+
 def create_snapshot(volume):
     """volume Like 'C:\\' — He comes back (shadow_id, device_path)."""
+    literal = _volume_literal(volume)
     script = (
         "$ErrorActionPreference='Stop';"
-        f"$r=(Get-WmiObject -List Win32_ShadowCopy).Create('{volume}','ClientAccessible');"
+        f"$r=(Get-WmiObject -List Win32_ShadowCopy).Create('{literal}','ClientAccessible');"
         "if($r.ReturnValue -ne 0){Write-Output ('ERR '+$r.ReturnValue);exit 2};"
         "$s=Get-WmiObject Win32_ShadowCopy|Where-Object{$_.ID -eq $r.ShadowID};"
         "Write-Output ($s.ID+'|'+$s.DeviceObject)"
@@ -63,7 +81,8 @@ def create_snapshot(volume):
 
 
 def delete_snapshot(shadow_id):
-    script = ("Get-WmiObject Win32_ShadowCopy|Where-Object{$_.ID -eq '" + shadow_id + "'}"
+    literal = _shadow_literal(shadow_id)
+    script = ("Get-WmiObject Win32_ShadowCopy|Where-Object{$_.ID -eq '" + literal + "'}"
               "|ForEach-Object{$_.Delete()}")
     code, _out, err = _ps(script, timeout=120)
     if code != 0:

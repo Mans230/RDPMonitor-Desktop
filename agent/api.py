@@ -70,7 +70,7 @@ class Configuration(StrictModel):
 
 
 class Upload(StrictModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=180)
     size: int = Field(ge=0, le=MAX_TRANSFER)
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
 

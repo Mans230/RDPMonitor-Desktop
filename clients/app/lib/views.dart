@@ -771,7 +771,7 @@ class _ActivityViewState extends State<ActivityView> {
       children: [
         DataTree(value: entry),
         if (tab == 'Events') Align(alignment: Alignment.centerRight, child: TextButton.icon(
-          onPressed: () async { try { await widget.machine.api.call('POST', '/events/${entry['id']}/ack', body: {}); await widget.onRefresh(); } catch (e) { widget.onError(e.toString()); } },
+          onPressed: () async { try { final id = entry['id']?.toString() ?? ''; if (id.isEmpty) throw const FormatException('This event has no identifier.'); await widget.machine.api.call('POST', '/events/${Uri.encodeComponent(id)}/ack', body: {}); await widget.onRefresh(); } catch (e) { widget.onError(e.toString()); } },
           icon: const Icon(Icons.done_outlined), label: const Text('Acknowledge'),
         )),
       ],

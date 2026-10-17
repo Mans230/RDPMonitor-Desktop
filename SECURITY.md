@@ -42,7 +42,7 @@ The worker probes the configured reachability target (`ping_target`, default `1.
 - Monitor configuration is fail-closed: a field whose name reads as credential material is excluded from the readable and writable configuration surface, even when it is newly introduced, so a future secret cannot silently become exportable or settable.
 - The job transport, durable events and audit records now share a single secret-name definition instead of three lists that could drift.
 - The update-availability comparison uses SHA-256 rather than MD5.
-- Backup pre/post hooks run with the worker identity. They can be disabled with the `hooks_enabled` backup setting, a command containing a NUL byte is refused rather than executed, and each run is logged by SHA-256 fingerprint instead of the command text, which may embed credentials.
+- Backup pre/post hooks run with the worker identity. They are disabled by default and must be explicitly enabled with the `hooks_enabled` backup setting, a command containing a NUL byte is refused rather than executed, and each run is logged by SHA-256 fingerprint instead of the command text, which may embed credentials.
 - The relay's only unauthenticated endpoint, `GET /api/v1/pairings/{lookup_id}`, is rate-limited per source address with a bounded tracking table, so an anonymous caller cannot drive durable storage without limit while the fragment holder still completes the first fetch.
 - The relay rejects a WebSocket handshake whose browser `Origin` header does not match the configured public origin. The first-party agent and desktop clients send no `Origin` and are unaffected.
 - Relay limits declare exactly one explicit bound per field, so a newly added limit cannot silently share or escape an existing ceiling.
