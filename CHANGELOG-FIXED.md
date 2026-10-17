@@ -117,3 +117,9 @@ that architectural limitation is documented rather than hidden.
 - Corrected a live telemetry socket race: the HTTPS keep-alive now exceeds the desktop pool's 20-second idle lifetime instead of closing at the same five-second boundary as polling. Native monitoring stayed Live/error-free for 12 consecutive five-second observations after reproducing the stale-connection failure.
 - Verification: 218 backend tests and 37 Flutter tests passed; analyzer clean. Actual native preparation/consent/private CMD copy, protected close/reopen and automatic viewer admission were exercised. Frozen worker plus separate named-pipe HTTPS gateway proved real disk telemetry, privileged-access denial, bootstrap retirement and one saved identity; responsive direct dialogs rendered without Flutter errors. Installed SCM/reboot/provider routing and production signing remain unvalidated external gates; this is an unsigned monitoring-only preview.
 
+## Desktop Preview 6 — readable selection labels
+
+- Corrected the shared chip theme: unselected labels now use the surface foreground, and selected choice chips use their explicit contrasting secondary label style. This fixes invisible fleet filters and history/activity selectors without per-screen fallback styles.
+- Native light/dark Machines and Activity surfaces were exercised after reproducing the blank labels in the packaged Preview 5 desktop. Direct-installation security and the immutable Preview 5 guest URL/SHA256 remain unchanged.
+- Desktop build number is 6. Preview 5 assets remain published unchanged; this is a separate corrected desktop release, not a silent asset replacement.
+

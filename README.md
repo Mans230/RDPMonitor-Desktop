@@ -6,13 +6,13 @@ The client uses Flutter widgets, not a WebView. Telegram and the browser panel h
 
 **Windows preview · MIT open source · unsigned monitoring-only installer**
 
-[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.1-preview.5) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
+[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.1-preview.6) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
 
 ![Native monochrome Backups workspace connected to a temporary local read-only verification agent](docs/images/desktop-overview.png)
 
 The native Flutter console follows the supplied black-and-white design: compact bordered panels, system typography, grouped command rows, semantic status colors and responsive navigation. Light and dark themes retain the same hierarchy. Metrics and capabilities come from the real agent, not prototype sample data or a browser wrapper.
 
-Preview 5 includes the native console redesign and direct, desktop-key-bound VM installation.
+Preview 6 includes the native console redesign, direct desktop-key-bound VM installation and corrected light/dark filter-label contrast. It uses the unchanged, pinned Preview 5 guest installer.
 
 ## What it manages
 

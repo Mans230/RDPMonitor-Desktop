@@ -89,8 +89,8 @@ ThemeData buildMonitorTheme(Brightness brightness) {
     ),
     chipTheme: ChipThemeData(
       backgroundColor: panel, selectedColor: ink, showCheckmark: false,
-      labelStyle: WidgetStateTextStyle.resolveWith((states) => TextStyle(fontFamily: 'Segoe UI', fontSize: 12,
-        color: states.contains(WidgetState.selected) ? scheme.onPrimary : ink)),
+      labelStyle: TextStyle(fontFamily: 'Segoe UI', fontSize: 12, color: ink),
+      secondaryLabelStyle: TextStyle(fontFamily: 'Segoe UI', fontSize: 12, color: scheme.onPrimary),
       side: BorderSide(color: scheme.outline), shape: const StadiumBorder(),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
     ),

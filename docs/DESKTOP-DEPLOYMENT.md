@@ -19,7 +19,7 @@ Build the guest first, then pin the final signed native guest executable into th
 
 ```powershell
 $build = @{
-  Version = '1.0.1'; BuildNumber = 5
+  Version = '1.0.1'; BuildNumber = 6
   CertificateThumbprint = $PublisherThumbprint
   TimestampUrl = $TimestampServiceHttpsUrl
   VCRuntimeDirectory = $LicensedX64CrtDirectory
@@ -59,7 +59,7 @@ For an explicitly unsigned evaluation build, use the separate parameter set and 
 
 ```powershell
 $preview = @{
-  UnsignedPreview = $true; Version = '1.0.1'; BuildNumber = 5
+  UnsignedPreview = $true; Version = '1.0.1'; BuildNumber = 6
   VCRuntimeDirectory = $LicensedX64CrtDirectory
   VCRedistributionNoticeFile = $MicrosoftRedistributionNotice
   Python = '.\.venv\Scripts\python.exe'
@@ -76,7 +76,7 @@ $GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
   -GuestSetupMode unsigned-preview -GuestSetupProtocol 2
 ```
 
-Checked-in desktop defaults pin the official Preview 5 guest asset and secure direct setup protocol **2**. Rebuilt installers need not be byte-identical: publish your own exact guest bytes under an immutable HTTPS URL and override URL/digest/mode/protocol together. A protocol-1 guest cannot provision direct setup, so command copying fails closed rather than downloading the old relay-only guest. Download URLs must contain no credentials, query, fragment or CMD metacharacters. Commands above CMD's 8191-character limit fail explicitly.
+Preview 6 desktop defaults pin the unchanged official **Preview 5 guest** asset and secure direct setup protocol **2**. Rebuilt installers need not be byte-identical: publish your own exact guest bytes under an immutable HTTPS URL and override URL/digest/mode/protocol together. A protocol-1 guest cannot provision direct setup, so command copying fails closed rather than downloading the old relay-only guest. Download URLs must contain no credentials, query, fragment or CMD metacharacters. Commands above CMD's 8191-character limit fail explicitly.
 
 Unsigned checksums establish integrity, not publisher authenticity. Preview setup requires explicit evaluation consent and cannot enable administration, protection or schedules; use a disposable Windows VM first. The source agent CLI is separate from installed preview policy: source evaluation must explicitly use `--read-only`.
 
