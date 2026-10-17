@@ -95,3 +95,25 @@ that architectural limitation is documented rather than hidden.
 - Corrected a Windows named-pipe connection race exposed by integration verification: after contention, the last instance can disappear before its successor exists. The existing five-second handshake now survives that known-busy gap without retrying a submitted RPC; a real Windows-handle regression proves exactly one execution.
 - Integrated verification: 196 backend tests and 30 client tests passed; analyzer clean. Full installed service/reboot, production signing and public relay acceptance remain separate external gates.
 
+## Native console redesign — included in Preview 5
+
+- Applied the supplied black-and-white console reference to the existing Flutter app: compact bordered panels, monochrome charts, semantic status accents and dense grouped operation rows.
+- Combined Backups/Recovery and Processes/Services navigation with separate tabs; added a searchable real-catalog operation picker and a dedicated CMD setup guide without removing existing capabilities.
+- Added full-sidebar/icon-rail/drawer navigation, retained manual hide/show, and preserved disk/expiry/renewal/cost metadata in responsive fleet tables and labelled narrow records.
+- Unified dialog actions across setup, profiles, operations, configuration and desktop settings. Phone dialogs use full-height scrollable sheets and full-width actions.
+- Added client-only telemetry pause/resume; agent jobs and monitoring remain independent.
+- Fixed dialog-theme interpolation when resizing between desktop and phone constraints. A consumer regression reproduces the previous assertion with an open settings dialog and checks resize bounds and dismissal.
+- Kept the published Preview 4 one-CMD guest installation and security hardening; no prototype sample operations or telemetry are used.
+- Verification: 31 Flutter tests passed, analyzer clean and Windows release binary built. Actual native rendering covered 18 routes/tabs at 1440, 900, 700, 600 and 390 logical pixels (90 scenes) without Flutter error events after the resize fix. Native drawer/sidebar, setup/editor cancellation, pause/resume and a successful read-only `rdp.sessions` job were exercised against a temporary local agent.
+
+## Desktop Preview 5 — relay-free, desktop-bound VM setup
+
+- Add machine now takes name/group and a reachable VM address, prepares one private Administrator CMD command and automatically saves a locally preapproved viewer identity. Relay configuration and return codes are not part of normal setup.
+- Desktop client and VM transport keys are distinct. The desktop client private key stays on the PC; the VM creates its own CA and approves the exact CSR locally without opening a remote pairing window. Knowing the IP, nonce or public certificate cannot claim the VM.
+- Added bounded direct setup parsing, transport public-key/SAN/lifetime pinning, ordinary mTLS protected probing, expiring public bootstrap and authenticated idempotent completion.
+- Added fresh-only native provisioning, unique RDP-peer/explicit source selection and executable/port/source-limited Windows firewall rules. Disabled/permissive filtering or ambiguous source selection fails closed; provider/router configuration remains external. Trusted packaged helper invocation uses process-only execution policy without changing machine/user policy.
+- Protected issued/saved checkpoints recover from failed probes, committed-but-reported-failed vault writes and late acknowledgements without duplicate issuance or dropping the live machine. Saved metadata survives reconciliation; initial VM transport keys are removed from saved checkpoints.
+- Corrected certificate bundle expiry to the actual DER certificate notAfter precision; cross-language verification exposed the previous millisecond discrepancy.
+- Corrected a live telemetry socket race: the HTTPS keep-alive now exceeds the desktop pool's 20-second idle lifetime instead of closing at the same five-second boundary as polling. Native monitoring stayed Live/error-free for 12 consecutive five-second observations after reproducing the stale-connection failure.
+- Verification: 218 backend tests and 37 Flutter tests passed; analyzer clean. Actual native preparation/consent/private CMD copy, protected close/reopen and automatic viewer admission were exercised. Frozen worker plus separate named-pipe HTTPS gateway proved real disk telemetry, privileged-access denial, bootstrap retirement and one saved identity; responsive direct dialogs rendered without Flutter errors. Installed SCM/reboot/provider routing and production signing remain unvalidated external gates; this is an unsigned monitoring-only preview.
+

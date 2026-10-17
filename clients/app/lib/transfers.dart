@@ -72,36 +72,36 @@ class _UploadViewState extends State<UploadView> {
     final offset = upload?['offset'] as num?;
     final colors = Theme.of(context).colorScheme;
     final progress = total != null && total > 0 && offset != null ? offset / total : null;
-    return Padding(padding: const EdgeInsets.only(bottom: 22), child: MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return Padding(padding: const EdgeInsets.only(bottom: 8), child: MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const SectionHeader(title: 'Upload a file', subtitle: 'Stage a local file in the agent’s approved upload directory.'),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       Text('Target: ${widget.machine.profile.name}', style: Theme.of(context).textTheme.titleSmall),
       const SizedBox(height: 10),
       Wrap(spacing: 8, runSpacing: 8, children: [
         const StatusPill(label: 'SHA256 integrity check', icon: Icons.fact_check_outlined),
         if (widget.machine.health['read_only'] == true) const StatusPill(label: 'Read-only mode', tone: MonitorTone.warning, icon: Icons.lock_outlined),
       ]),
-      const SizedBox(height: 14),
+      const SizedBox(height: 8),
       Text('The Windows worker must have uploads enabled and an approved directory. Existing files are not silently replaced. Downloads are available as authenticated artifacts on job results.', style: TextStyle(color: colors.onSurfaceVariant)),
-      const SizedBox(height: 20),
+      const SizedBox(height: 12),
       Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: colors.surfaceContainerLow, borderRadius: BorderRadius.circular(8)),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: colors.surfaceContainerLow, border: Border.all(color: colors.outlineVariant), borderRadius: BorderRadius.circular(4)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             Icon(file == null ? Icons.upload_file_outlined : Icons.insert_drive_file_outlined, color: colors.onSurfaceVariant),
             const SizedBox(width: 12),
             Expanded(child: Text(file?.name ?? 'No local file selected', style: Theme.of(context).textTheme.titleSmall)),
           ]),
-          const SizedBox(height: 14),
-          Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
             OutlinedButton.icon(onPressed: busy ? null : choose, icon: const Icon(Icons.attach_file_outlined), label: Text(file == null ? 'Choose local file' : 'Change file')),
             if (file != null) FilledButton.icon(onPressed: busy ? null : send, icon: const Icon(Icons.upload_outlined), label: Text(upload == null ? 'Review & upload' : 'Resume / complete')),
             if (busy) TextButton.icon(onPressed: stop ? null : () => setState(() => stop = true), icon: const Icon(Icons.pause_circle_outline), label: Text(stop ? 'Pause requested' : 'Pause after current chunk')),
           ]),
           if (busy || upload != null) ...[
-            const SizedBox(height: 18),
-            LinearProgressIndicator(value: progress, minHeight: 6, semanticsLabel: 'File upload progress'),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(value: progress, minHeight: 4, semanticsLabel: 'File upload progress'),
             const SizedBox(height: 10),
             Text(upload == null ? 'Preparing the file and transfer integrity check…' : '${bytes(offset)} / ${bytes(total)}${progress == null ? '' : ' · ${(progress * 100).toStringAsFixed(1)}%'}', style: TextStyle(fontFeatures: monitorFigures, color: colors.onSurfaceVariant)),
             if (stop && busy) const Padding(padding: EdgeInsets.only(top: 6), child: Text('The current protocol chunk finishes before the transfer pauses.')),
@@ -118,9 +118,9 @@ class _UploadViewState extends State<UploadView> {
           ],
         ]),
       ),
-      if (error != null) Padding(padding: const EdgeInsets.only(top: 16), child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: colors.errorContainer, borderRadius: BorderRadius.circular(8)),
+      if (error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: colors.errorContainer, border: Border.all(color: colors.error), borderRadius: BorderRadius.circular(4)),
         child: SelectableText(error!, style: TextStyle(color: colors.onErrorContainer)),
       )),
     ])));

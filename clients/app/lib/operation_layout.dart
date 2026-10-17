@@ -1,5 +1,3 @@
-import 'package:flutter/material.dart';
-
 const operationSections = <String, String>{
   'overview': 'Overview', 'monitoring': 'Monitoring', 'security': 'Security',
   'accounts': 'Accounts', 'processes': 'Processes', 'services': 'Services',
@@ -77,21 +75,4 @@ String operationSubcategory(Map<String, dynamic> operation) {
   if (destination == 'Overview') return 'Machine and session inspection';
   if (destination == 'Files') return 'Approved files and exports';
   return 'Additional agent operations';
-}
-
-class OperationCardGrid extends StatelessWidget {
-  final List<Widget> children;
-  const OperationCardGrid({super.key, required this.children});
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(builder: (context, bounds) {
-    const gap = 16.0;
-    final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
-    final minimumWidth = 320.0 * (textScale < 1 ? 1 : textScale);
-    final columns = ((bounds.maxWidth + gap) / (minimumWidth + gap)).floor().clamp(1, 3);
-    final cardWidth = (bounds.maxWidth - gap * (columns - 1)) / columns;
-    return Wrap(spacing: gap, runSpacing: gap, children: [
-      for (final child in children) SizedBox(width: cardWidth, child: child),
-    ]);
-  });
 }

@@ -41,6 +41,13 @@ if ($Remove) {
         $recorded = (Get-Content -LiteralPath $knownDeployment -Raw | ConvertFrom-Json).publisher_thumbprint
         if ($recorded.Replace(' ','').ToUpperInvariant() -ne $PublisherThumbprint.Replace(' ','').ToUpperInvariant()) { throw 'Deployment record publisher does not match the pinned trust anchor.' }
     }
+    if (Test-Path -LiteralPath $knownDeployment) {
+        $retained = Get-Content -LiteralPath $knownDeployment -Raw | ConvertFrom-Json
+        if ($retained.scope -eq 'Direct') {
+            if ($retained.read_only -ne $true -or $retained.component -ne 'guest' -or @($retained.remote_addresses).Count -ne 1 -or @($retained.interfaces).Count -ne 0) { throw 'Invalid retained direct deployment; firewall was not modified.' }
+            & (Join-Path $PSScriptRoot 'direct-network.ps1') -Action Remove -Port ([int]$retained.port) -Source ([string]$retained.remote_addresses[0]) -Existing
+        }
+    }
     Stop-AgentServices
     foreach ($name in @('RDPMonitorGateway','RDPMonitorWorker')) {
         if (Get-Service $name -ErrorAction SilentlyContinue) { Invoke-Checked 'sc.exe' @('delete',$name) }
@@ -48,8 +55,8 @@ if ($Remove) {
     $shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RDPMonitor.lnk'
     Remove-ItemProperty -LiteralPath 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'RDPMonitorSessionHelper' -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
-    # Retain a protected deployment record and publisher key for recovery. Firewall
-    # rules (including RDP protection) and all backup repositories remain untouched.
+    # Retain protected deployment/publisher recovery and unrelated firewall policy.
+    # Only the deployment-owned direct gateway rule is removed.
     if ($DeleteData) {
         if ($ConfirmDataDeletion -cne 'DELETE RDPMonitor DATA') { throw 'Explicit -ConfirmDataDeletion "DELETE RDPMonitor DATA" is required.' }
         Remove-Item -LiteralPath $DataRoot -Recurse -Force
@@ -66,7 +73,7 @@ if ($Remove) {
             Write-Output 'Locked release files scheduled for deletion on reboot.'
         }
     }
-    Write-Output 'Services/client removed. Firewall unchanged; data preserved unless explicitly deleted. Protected publisher/recovery files retained.'
+    Write-Output 'Services/client and owned direct rule removed; unrelated firewall policy unchanged. Data preserved unless explicitly deleted. Protected publisher/recovery files retained.'
     exit 0
 }
 if ($Repair) {
@@ -80,6 +87,7 @@ if ($Repair) {
     Set-ProtectedDirectory $DataRoot
     Invoke-Checked (Join-Path $Package 'agent\RDPMonitorAgent.exe') @('service-register')
     Save-Deployment $deployment
+    Set-OwnedGatewayProgram $deployment (Join-Path $Package 'agent\RDPMonitorAgent.exe')
     Start-AgentServices
     Wait-AgentReady (Join-Path $Package 'agent\RDPMonitorAgent.exe') $deployment
     Write-Output 'Verified release and repaired native service registration. Data/schedules/firewall settings preserved.'

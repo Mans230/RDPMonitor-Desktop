@@ -153,3 +153,16 @@ function Copy-ProtectedRelease([string]$Package, [string]$Destination) {
         Invoke-Checked 'icacls.exe' @($item.FullName,'/reset','/T','/C')
     }
 }
+function Set-OwnedGatewayProgram($Deployment, [string]$Program) {
+    if ($Deployment.scope -eq 'Private') {
+        Set-NetFirewallRule -Name 'RDPMonitor-Gateway-Private' -Program $Program
+    } elseif ($Deployment.scope -eq 'Direct') {
+        if ($Deployment.read_only -ne $true -or $Deployment.component -ne 'guest' -or
+            @($Deployment.remote_addresses).Count -ne 1 -or @($Deployment.interfaces).Count -ne 0) {
+            throw 'Invalid retained direct deployment; scope was not broadened.'
+        }
+        & (Join-Path $PSScriptRoot 'direct-network.ps1') -Action Configure -Port ([int]$Deployment.port) -Source ([string]$Deployment.remote_addresses[0]) -Program $Program -Existing
+    } elseif ($Deployment.scope -ne 'Local') {
+        throw 'Unknown gateway scope; firewall was not modified.'
+    }
+}

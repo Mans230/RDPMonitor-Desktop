@@ -38,6 +38,7 @@ class Fleet extends ChangeNotifier with WidgetsBindingObserver {
   String? startupError;
   bool ready = false;
   bool notificationsEnabled = false;
+  bool pollingPaused = false;
   bool _polling = false;
   bool _active = true;
   int _tick = 0;
@@ -52,14 +53,24 @@ class Fleet extends ChangeNotifier with WidgetsBindingObserver {
     } catch (error) { startupError = 'Secure profile storage could not be opened: $error'; }
     ready = true; notifyListeners();
     await refresh();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) { if (_active) unawaited(refresh()); });
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!_active) return;
+      if (pollingPaused) { notifyListeners(); } else { unawaited(refresh()); }
+    });
   }
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // A running Windows client still polls and notifies when unfocused or hidden.
     if (Platform.isWindows) return;
     _active = state == AppLifecycleState.resumed;
-    if (_active) { for (final machine in machines.values) { machine.reconnect(); } unawaited(refresh(full: true)); }
+    if (_active && !pollingPaused) { for (final machine in machines.values) { machine.reconnect(); } unawaited(refresh(full: true)); }
+  }
+  void setPollingPaused(bool paused) {
+    if (pollingPaused == paused) return;
+    pollingPaused = paused;
+    notifyListeners();
+    // Only desktop polling pauses; active requests and agent jobs keep running.
+    if (!paused) unawaited(refresh(full: true));
   }
   Future<void> enableNotifications(bool enabled) async {
     if (!enabled) { notificationsEnabled = false; notifyListeners(); return; }
@@ -137,10 +148,30 @@ class Fleet extends ChangeNotifier with WidgetsBindingObserver {
   }
   Future<void> add(MachineProfile profile) async {
     _requireWritable();
-    if (machines.containsKey(profile.id)) throw ApiException('This agent is already enrolled. Remove its local profile before enrolling a replacement device certificate.');
-    final profiles = [...machines.values.map((m) => m.profile), profile];
-    await vault.save(profiles);
-    machines[profile.id] = MachineState(profile); selected = profile.id;
+    final profiles = await vault.load();
+    MachineProfile? committed;
+    for (final saved in profiles) {
+      if (saved.id != profile.id) continue;
+      if (committed != null || !saved.sameCredentials(profile)) {
+        throw ApiException('This agent already has a different saved identity. Its credentials were not replaced.');
+      }
+      committed = saved;
+    }
+    final cached = machines[profile.id];
+    if (cached != null && !cached.profile.sameCredentials(profile)) {
+      throw ApiException('This agent is already enrolled with another device identity. Use explicit local recovery.');
+    }
+    if (committed == null) {
+      await vault.save([...profiles, profile]);
+      profiles.add(profile);
+    }
+    // A vault pointer write may have committed before reporting an error. On a
+    // retry, admit the saved identity into memory without appending it again.
+    // Keep authoritative stored metadata and any other saved-but-unloaded VM.
+    for (final saved in profiles) {
+      machines.putIfAbsent(saved.id, () => MachineState(saved));
+    }
+    selected = profile.id;
     notifyListeners(); await refresh(full: true);
   }
   Future<void> save() async { _requireWritable(); await vault.save(machines.values.map((m) => m.profile).toList()); notifyListeners(); }

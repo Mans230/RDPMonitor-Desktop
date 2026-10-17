@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Callable
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 API_VERSION = 1
 CAPABILITIES = frozenset({"view", "operate", "security", "accounts", "execute", "files", "backup", "configure", "manage"})
 TERMINAL_STATES = frozenset({"succeeded", "partial", "failed", "cancelled", "interrupted"})

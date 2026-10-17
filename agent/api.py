@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import re
 import time
 import uuid
@@ -114,13 +115,15 @@ class Admission:
         correlation = uuid.uuid4().hex
         scope["rdpmonitor.correlation_id"] = correlation
         status, code, message = 0, "", ""
+        direct_request = scope.get("path") in {"/api/v1/direct/bootstrap", "/api/v1/direct/complete"}
+        body_limit = 256 if direct_request else MAX_BODY
         if not scope.get("rdpmonitor.tls"):
             status, code, message = 400, "tls_required", "HTTPS is required."
         headers = dict(scope.get("headers", []))
         length = headers.get(b"content-length", b"0")
         try:
-            if int(length) < 0 or int(length) > MAX_BODY:
-                status, code, message = 413, "body_too_large", "Request body exceeds 1 MiB."
+            if int(length) < 0 or int(length) > body_limit:
+                status, code, message = 413, "body_too_large", "Request body exceeds its permitted size."
         except ValueError:
             status, code, message = 400, "invalid_length", "Invalid request length."
         if self.active >= self.concurrency:
@@ -158,7 +161,7 @@ class Admission:
             if event["type"] == "http.request" and not event.get("more_body", False):
                 body_complete = True
             received += len(event.get("body", b""))
-            if received > MAX_BODY:
+            if received > body_limit:
                 raise HTTPException(413, detail="body_too_large")
             return event
 
@@ -188,7 +191,7 @@ def create_app(proxy) -> FastAPI:
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
         messages = {"request_timeout": "Request body deadline exceeded.",
-                    "body_too_large": "Request body exceeds 1 MiB."}
+                    "body_too_large": "Request body exceeds its permitted size."}
         code = exc.detail if isinstance(exc.detail, str) and exc.detail in messages else "http_error"
         return error_response(code, messages.get(code, "Resource or HTTP method unavailable."), exc.status_code,
                               request.scope.get("rdpmonitor.correlation_id"))
@@ -219,6 +222,31 @@ def create_app(proxy) -> FastAPI:
     async def enroll(request: Request, body: Enrollment):
         return await call(request, "pairing.enroll", {"code": body.code, "name": body.name,
                                                     "csr": body.csr}, public=True)
+
+    async def direct_nonce(request):
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate field")
+                value[key] = item
+            return value
+        try:
+            body = json.loads(await request.body(), object_pairs_hook=unique_object)
+            if (type(body) is not dict or set(body) != {"nonce"} or not isinstance(body["nonce"], str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{43}", body["nonce"])):
+                raise ValueError("nonce")
+            return body
+        except (ValueError, UnicodeError, RecursionError):
+            raise OperationError("invalid_request", "Direct requests require only a bounded nonce.", 422) from None
+
+    @app.post(prefix + "/direct/bootstrap")
+    async def direct_bootstrap(request: Request):
+        return await call(request, "direct.bootstrap", await direct_nonce(request), public=True)
+
+    @app.post(prefix + "/direct/complete")
+    async def direct_complete(request: Request):
+        return await call(request, "direct.complete", await direct_nonce(request))
 
     @app.get(prefix + "/catalog")
     async def catalog(request: Request):

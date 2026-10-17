@@ -38,6 +38,19 @@ def _gateway_tls(runtime, gateway_sid):
     return result
 
 
+def _ensure_listener_san(authority, host):
+    # Wildcard bind addresses are not endpoint identities. In particular, adding
+    # them must not reissue the pre-pinned transport certificate on first boot.
+    if host in ("0.0.0.0", "::"):
+        return
+    from cryptography import x509
+    info = authority.ensure()
+    certificate = x509.load_pem_x509_certificate(Path(info["certificate_path"]).read_bytes())
+    names = {str(name.value) for name in certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value}
+    if host not in names:
+        authority.ensure(configured_hosts=sorted(names | {host}))
+
+
 def run_worker(root: Path, data_dir: Path, stop_event: threading.Event,
                pipe_name=DEFAULT_PIPE, read_only=False):
     from .runtime import AgentRuntime
@@ -47,13 +60,8 @@ def run_worker(root: Path, data_dir: Path, stop_event: threading.Event,
     runtime = AgentRuntime(root, data_dir, read_only=read_only)
     deployment = data_dir / "deployment.json"
     if deployment.is_file():
-        from cryptography import x509
-        info = runtime.ca.ensure()
-        certificate = x509.load_pem_x509_certificate(Path(info["certificate_path"]).read_bytes())
-        names = {str(name.value) for name in certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value}
         host = json.loads(deployment.read_text(encoding="utf-8-sig"))["host"]
-        if host not in names:
-            runtime.ca.ensure(configured_hosts=sorted(names | {host}))
+        _ensure_listener_san(runtime.ca, host)
     try:
         try:
             gateway_sid = account_sid(GATEWAY_ACCOUNT)
@@ -88,7 +96,9 @@ def _run_https(proxy, paths, host, port, stop_event, on_started=None):
         ssl_certfile=paths["certificate_path"], ssl_ca_certs=paths["ca_path"],
         ssl_cert_reqs=ssl.CERT_OPTIONAL, ssl_version=ssl.PROTOCOL_TLS_SERVER,
         ssl_ciphers="ECDHE+AESGCM:ECDHE+CHACHA20", access_log=False,
-        limit_concurrency=None, backlog=64, timeout_keep_alive=5, proxy_headers=False,
+        # Exceed the desktop's 20s idle pool lifetime: a 5s server close races
+        # its 5s telemetry timer and can tear down a reused request socket.
+        limit_concurrency=None, backlog=64, timeout_keep_alive=30, proxy_headers=False,
         timeout_graceful_shutdown=20, h11_max_incomplete_event_size=16384,
         server_header=False, date_header=True)
     server = Server(config)

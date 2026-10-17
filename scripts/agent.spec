@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 root = Path(SPECPATH).parent
 hidden = ['agent.__main__', 'agent.service', 'agent.migration', 'agent.management',
-          'agent.setup', 'agent.relay', 'relay.protocol',
+          'agent.setup', 'agent.direct', 'agent.relay', 'relay.protocol',
           'servicemanager', 'win32timezone', 'win32serviceutil', 'win32security',
           'win32crypt', 'win32pipe', 'win32file', 'win32ts', 'win32profile',
           'win32process', 'win32event', 'win32con', 'win32api', 'win32service',

@@ -93,15 +93,30 @@ class Security:
             approved_role = challenge["role"]
             if approved_role not in ROLE_CAPABILITIES:
                 raise OperationError("invalid_pairing", "The local approval has an invalid role.", 403)
-            bundle = self.ca.issue_client(csr_pem, device_id)
-            connection.execute("INSERT INTO devices(id,name,role,fingerprint,certificate,created,expires) VALUES(?,?,?,?,?,?,?)",
-                (device_id, name, approved_role, bundle["fingerprint"], bundle["certificate"], now, bundle["expires"]))
+            bundle = self._issue_device(connection, name, csr_pem, approved_role, device_id, now)
             connection.execute("UPDATE pairings SET consumed=? WHERE digest=? AND consumed IS NULL", (now, digest))
             actor = self._actor(connection, device_id)
             self.store._append_audit(connection, actor, "pairing.enroll", "succeeded", {"role": approved_role})
-        return {"device": {"id": device_id, "name": name, "role": approved_role},
+        return bundle
+
+    def _issue_device(self, connection, name, csr_pem, role, device_id, now):
+        bundle = self.ca.issue_client(csr_pem, device_id)
+        connection.execute("INSERT INTO devices(id,name,role,fingerprint,certificate,created,expires) VALUES(?,?,?,?,?,?,?)",
+            (device_id, name, role, bundle["fingerprint"], bundle["certificate"], now, bundle["expires"]))
+        return {"device": {"id": device_id, "name": name, "role": role},
                 "certificate": bundle["certificate"], "ca_certificate": bundle["ca_certificate"],
                 "agent_id": self.agent_id, "expires": bundle["expires"]}
+
+    def provision_viewer(self, name, csr_pem) -> dict:
+        """LOCAL ONLY: approve a pre-bound CSR without a redeemable pairing code."""
+        name = _text(name, "Device name", 128)
+        self.ca.validate_csr(csr_pem)
+        with self.store._transaction() as connection:
+            bundle = self._issue_device(connection, name, csr_pem, "viewer", str(uuid.uuid4()), timestamp())
+            self.store._append_audit(connection,
+                {"id": "local", "name": "Local administrator", "role": "local"},
+                "direct.provision", "succeeded", {"device_id": bundle["device"]["id"], "role": "viewer"})
+        return bundle
 
     def _actor(self, connection, device_id) -> dict:
         if not isinstance(device_id, str):

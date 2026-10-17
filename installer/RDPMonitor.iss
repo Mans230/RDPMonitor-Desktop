@@ -89,6 +89,7 @@ var
   ReadOnlyCheck: TNewCheckBox;
   Session, SessionDir, Bootstrap, InstalledRelease: String;
   Registered, PairOnly, FinishedPairing, Prepared, PostInstallFailed, CmdBootstrap: Boolean;
+  HelperExitCode: Integer;
 
 function SetEnvironmentVariable(Name: String; Value: Integer): Boolean;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
@@ -120,8 +121,28 @@ end;
 function InvokeHelper(const Executable, Arguments: String): Boolean;
 var ExitCode: Integer;
 begin
+  HelperExitCode := -1;
   Result := Exec(Executable, 'setup ' + Arguments, '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
-  if Result then Result := ExitCode = 0;
+  if Result then begin
+    HelperExitCode := ExitCode;
+    Result := ExitCode = 0;
+  end;
+end;
+
+function CommandFailure: String;
+begin
+  case HelperExitCode of
+    70: Result := 'Invalid direct command. Prepare and copy a new command from the originating desktop.';
+    71: Result := 'Direct command expired. Prepare a new command and check both clocks.';
+    72: Result := 'No unique active RDP TCP peer was found. Set the advanced desktop source IP explicitly and prepare a new command.';
+    73: Result := 'Retained identity found. Use same-release maintenance; command setup never overwrites it.';
+    74: Result := 'Source/listener address family mismatch. DNS endpoints use IPv4; IPv6 requires an explicit IPv6 endpoint and source.';
+    75: Result := 'Cannot inspect TCP listeners. Run elevated and check Windows networking prerequisites.';
+    76: Result := 'The HTTPS port is already listening. Stop the conflicting service or prepare a command using another port.';
+    77: Result := 'Check Windows Defender Firewall and the owned single-source direct rule. Provider/router reachability must be configured separately.';
+  else
+    Result := 'Use Administrator CMD on a fresh VM, a current command and explicit preview consent. Check source IP, free HTTPS port and Windows networking prerequisites.';
+  end;
 end;
 
 function ReadResult(const Name: String): String;
@@ -134,6 +155,14 @@ end;
 procedure ShowCode;
 begin
   CodeMemo.Text := ReadResult('connection.txt');
+  if ReadResult('direct.txt') = '1' then begin
+    CodeLabel.Caption := ReadResult('status.txt');
+    if ReadResult('automatic.txt') <> '1' then
+      CodeLabel.Caption := CodeLabel.Caption + #13#10 + 'Expires (UTC): ' + ReadResult('expires.txt') + #13#10 +
+        'Enter the address, fingerprint and code separately in Pair installed agent (direct HTTPS). Only the originally approved desktop source IP is allowed.';
+    RefreshButton.Caption := 'New manual approval';
+    exit;
+  end;
   if ReadResult('automatic.txt') = '1' then
     CodeLabel.Caption := ReadResult('status.txt') + #13#10 +
       'Keep Add machine open on the originating desktop (or reopen it to resume). The code below is optional manual recovery only; private, single-use, expires after five minutes.'
@@ -153,7 +182,7 @@ end;
 procedure RefreshCode(Sender: TObject);
 var Agent: String;
 begin
-  if ReadResult('automatic.txt') = '1' then
+  if (ReadResult('automatic.txt') = '1') and (ReadResult('direct.txt') <> '1') then
     if MsgBox('Generate a new advanced recovery code? This replaces the VM pairing approval, so automatic enrollment may stop. Use the new code with advanced Connect with code on your desktop.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then exit;
   Agent := InstalledRelease + '\agent\RDPMonitorAgent.exe';
   if InvokeHelper(Agent, 'pair --session ' + Session) then ShowCode
@@ -187,7 +216,7 @@ begin
   ClearCommandEnvironment;
   if WizardSilent then exit;
 #ifdef UnsignedPreview
-  if MsgBox('UNSIGNED PREVIEW: this installer is not authenticated by a production publisher. It is for evaluation only and FORCES monitoring-only mode. It cannot enable administration, schedules or automatic RDP/firewall/account changes. Continue only if you independently trust this preview source?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then exit;
+  if MsgBox('UNSIGNED PREVIEW: this installer is not authenticated by a production publisher. It is for evaluation only and FORCES monitoring-only mode. It cannot enable administration, schedules or automatic RDP/account changes. Direct command setup creates one program/port-specific inbound HTTPS firewall rule restricted to your approved desktop source IP; it does not configure provider/router firewalls. Continue only if you independently trust this preview source?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then exit;
 #endif
   Result := True;
 end;
@@ -210,7 +239,7 @@ begin
       ClearCommandEnvironment;
     end;
     if not Imported then
-      RaiseException('Command setup rejected. Use an Administrator CMD, a fresh VM, a valid HTTPS setup command and explicit preview consent. No services were installed.');
+      RaiseException('Command setup rejected [' + IntToStr(HelperExitCode) + ']. ' + CommandFailure + ' No services were installed and no provider/router rules were configured.');
   end else if not InvokeHelper(Bootstrap, 'prepare --session ' + Session) then
     RaiseException('Cannot prepare administrator/SYSTEM-owned setup exchange. No invitation was written.');
   Prepared := True;
@@ -218,8 +247,8 @@ begin
   Registered := ReadResult('registered.txt') = '1';
   ModePage := CreateInputOptionPage(wpWelcome, 'Agent maintenance', 'Preserve this machine identity and enrolled devices',
     'Generate a new private code without consuming another installation invitation, or repair this same packaged release. Version/trust changes use the signed update lifecycle.', True, False);
-  ModePage.Add('Pair installed agent: generate a new five-minute connection code');
-  ModePage.Add('Repair the same release: preserve identity, devices, relay and stored data');
+  ModePage.Add('Pair installed agent: create explicit five-minute manual enrollment approval');
+  ModePage.Add('Repair the same release: preserve identity, devices, direct/relay scope and stored data');
   ModePage.SelectedValueIndex := 0;
   InvitationPage := CreateInputQueryPage(ModePage.ID, 'Add this VM to your desktop', 'Paste the private setup code from Add machine',
     'Approve enrollment to your self-hosted relay with valid HTTPS. New setup codes connect automatically to the originating desktop. Legacy installation invitations remain supported. Nothing is sent in process arguments or setup logs.');
@@ -346,8 +375,8 @@ begin
       if CmdBootstrap then exit;
       WizardForm.FinishedHeadingLabel.Caption := 'Setup requires attention';
       WizardForm.FinishedLabel.Caption := ReadResult('status.txt') + #13#10#13#10 +
-        'The runtime was installed, but relay setup or pairing did not complete. Do not treat this as a completed connection.' + #13#10#13#10 +
-        'Rerun this installer to repair the same release or generate a fresh code for advanced Connect with code. If registration was rejected, discard the pending setup and create a new setup code in Add machine. Identity and saved data are preserved.';
+        'The runtime was installed, but setup or authentication prerequisites did not complete. Do not treat this as a completed desktop connection.' + #13#10#13#10 +
+        'Rerun this installer to repair the same release. Direct setup: reopen Add machine on the originating desktop; if needed, use explicit Pair installed agent with Advanced direct HTTPS. Check provider/router port reachability separately. Relay setup: generate a fresh code for advanced Connect with code. Identity and saved data are preserved.';
       WizardForm.FinishedLabel.Visible := True;
       WizardForm.FinishedLabel.AutoSize := False;
       WizardForm.FinishedLabel.Height := WizardForm.FinishedPage.ClientHeight - WizardForm.FinishedLabel.Top - ScaleY(8);
@@ -370,7 +399,9 @@ begin
     CopyButton.SetBounds(CodeLabel.Left, CodeMemo.Top + CodeMemo.Height + ScaleY(12), ScaleX(150), ScaleY(28));
     RefreshButton.SetBounds(CodeLabel.Left + ScaleX(165), CopyButton.Top, ScaleX(150), ScaleY(28));
     WizardForm.FinishedLabel.Visible := False;
-    if ReadResult('automatic.txt') = '1' then
+    if ReadResult('direct.txt') = '1' then
+      WizardForm.FinishedHeadingLabel.Caption := 'Direct guest installed: desktop authentication pending'
+    else if ReadResult('automatic.txt') = '1' then
       WizardForm.FinishedHeadingLabel.Caption := 'Installed: ready for your desktop'
     else WizardForm.FinishedHeadingLabel.Caption := 'Installed: private connection code';
   end;
@@ -391,7 +422,7 @@ end;
 
 function InitializeUninstall: Boolean;
 begin
-  Result := MsgBox('Remove RDPMonitor services and packaged files? Machine identity, enrolled devices, data, backups and all firewall/protection policy are retained. Relay route revocation is a separate action in the desktop app.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+  Result := MsgBox('Remove RDPMonitor services, packaged files and its owned direct gateway firewall rule? Machine identity, enrolled devices, data, backups and unrelated firewall/protection policy are retained. Relay route revocation is a separate action in the desktop app.', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
   if Result then begin
     Result := InvokeHelper(ExpandConstant('{app}\releases\{#ReleaseVersion}\agent\RDPMonitorAgent.exe'),
       'remove --package ' + Quote(ExpandConstant('{app}\releases\{#ReleaseVersion}')));

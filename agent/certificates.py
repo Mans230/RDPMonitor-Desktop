@@ -299,19 +299,22 @@ class CertificateAuthority:
             machine = winreg.QueryValueEx(key, "MachineGuid")[0]
         return hashlib.sha256(str(machine).encode("utf-8")).hexdigest()
 
-    def ensure(self, configured_hosts: list[str] | None = None) -> dict:
+    def ensure(self, configured_hosts: list[str] | None = None, *,
+               initial_server_key_pem: str | None = None) -> dict:
         """Return stable public TLS paths/identity, reissuing a server near expiry.
 
         An explicit configured_hosts list replaces the locally approved extra
         SANs; None retains the persisted set. Caller must be local administration.
+        initial_server_key_pem is accepted only before any authority/TLS state
+        exists; it never replaces retained identity or rotates an existing key.
         """
         with self._lock:
             # agent_identity takes the same cross-process lock independently;
             # release it before taking the certificate administration lock.
             identity = agent_identity(self.data_dir)
-            return self._ensure_locked(identity, configured_hosts)
+            return self._ensure_locked(identity, configured_hosts, initial_server_key_pem)
 
-    def _ensure_locked(self, identity, configured_hosts):
+    def _ensure_locked(self, identity, configured_hosts, initial_server_key_pem=None):
         with identity_lock(self.data_dir):
             binding = self._binding()
             ca_path = self.directory / "ca.pem"
@@ -320,6 +323,18 @@ class CertificateAuthority:
             for path in (ca_path, private_path, metadata_path):
                 reject_links(path)
             present = [path.exists() for path in (ca_path, private_path, metadata_path)]
+            initial_key = None
+            if initial_server_key_pem is not None:
+                if any(path.exists() for path in (ca_path, private_path, metadata_path,
+                        self.directory / "server.pem", self.directory / "server.key")):
+                    raise OperationError("direct_state_exists", "Initial transport keys cannot replace retained TLS state.", 409)
+                try:
+                    initial_key = serialization.load_pem_private_key(initial_server_key_pem.encode("ascii"), password=None)
+                    if (not isinstance(initial_key, rsa.RSAPrivateKey) or initial_key.key_size != 2048
+                            or initial_key.public_key().public_numbers().e != 65537):
+                        raise ValueError("transport key")
+                except (ValueError, TypeError, UnicodeError) as exc:
+                    raise OperationError("direct_setup_invalid", "A fresh RSA-2048 transport key is required.") from exc
             if any(present) and not all(present):
                 raise OperationError("ca_incomplete", "Certificate authority state is incomplete; restore protected state or explicitly re-enroll.", 500)
             if not any(present):
@@ -383,7 +398,7 @@ class CertificateAuthority:
                 except (ValueError, OperationError, x509.ExtensionNotFound):
                     renew = True
             if renew:
-                server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                server_key = initial_key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
                 now = utcnow()
                 server = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, identity["id"])]))
                           .issuer_name(ca.subject).public_key(server_key.public_key()).serial_number(x509.random_serial_number())
@@ -406,7 +421,8 @@ class CertificateAuthority:
                           "ca_path": str(ca_path), "fingerprint": server.fingerprint(hashes.SHA256()).hex()}
             return dict(self._info)
 
-    def validate_csr(self, csr_pem: str) -> x509.CertificateSigningRequest:
+    @staticmethod
+    def validate_csr(csr_pem: str) -> x509.CertificateSigningRequest:
         if not isinstance(csr_pem, str) or len(csr_pem.encode("utf-8")) > 32768:
             raise OperationError("invalid_csr", "A bounded PEM certificate signing request is required.")
         try:
@@ -460,7 +476,8 @@ class CertificateAuthority:
                            .sign(self._key, hashes.SHA256()))
             return {"certificate": certificate.public_bytes(serialization.Encoding.PEM).decode("ascii"),
                     "ca_certificate": self._ca.public_bytes(serialization.Encoding.PEM).decode("ascii"),
-                    "expires": timestamp(expires), "fingerprint": certificate.fingerprint(hashes.SHA256()).hex()}
+                    "expires": timestamp(certificate_time(certificate, "not_valid_after")),
+                    "fingerprint": certificate.fingerprint(hashes.SHA256()).hex()}
 
     def verify_client(self, peer_der: bytes) -> x509.Certificate:
         if not isinstance(peer_der, bytes) or not 1 <= len(peer_der) <= 16384:

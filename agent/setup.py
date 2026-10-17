@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,9 @@ import shutil
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
+
+from .contracts import OperationError
 
 from .ipc import current_identity, protect_path, WorkerProxy
 from .service import (data_directory, verify_protected_tree, register_services,
@@ -106,8 +110,12 @@ def _deployment() -> dict | None:
     release = Path(result['release']).absolute()
     if release.parent != install_directory() / 'releases' or not re.fullmatch(r'\d+\.\d+\.\d+', release.name):
         raise ValueError('Installed release path is invalid')
-    if result.get('host') != '127.0.0.1' or result.get('scope') != 'Local':
-        raise ValueError('This relay wizard cannot modify a private/direct deployment; use its signed lifecycle tools')
+    if result.get('scope') == 'Direct':
+        _direct_network_values(result)
+        if result.get('read_only') is not True or result.get('component') != 'guest':
+            raise PermissionError('Direct deployments require the monitoring-only guest component')
+    elif result.get('host') != '127.0.0.1' or result.get('scope') != 'Local':
+        raise ValueError('This wizard supports relay loopback and direct guest deployments only')
     if result.get('unsigned_preview') and result.get('read_only') is not True:
         raise PermissionError('Unsafe preview deployment')
     return result
@@ -116,7 +124,9 @@ def _deployment() -> dict | None:
 def _require_fresh() -> None:
     """Command provisioning never repairs or replaces a retained machine identity."""
     root = data_directory()
-    for relative in ('deployment.json', 'identity.json', 'gateway/relay.json'):
+    for relative in ('deployment.json', 'identity.json', 'tls', 'direct-bootstrap.json',
+                     'state.sqlite3', 'state.sqlite3-wal', 'state.sqlite3-shm',
+                     'state.sqlite3-journal', 'gateway/relay.json'):
         if (root / relative).exists():
             raise ValueError('Command setup requires a fresh machine; use interactive maintenance')
     import win32serviceutil
@@ -130,9 +140,90 @@ def _require_fresh() -> None:
         raise ValueError('Command setup cannot replace existing services')
 
 
+def _direct_metadata(spec: dict) -> dict:
+    endpoint = urlsplit(spec['endpoint'])
+    return {'scope': 'Direct', 'endpoint': spec['endpoint'],
+            'host': '::' if ':' in endpoint.hostname else '0.0.0.0',
+            'port': endpoint.port, 'remote_addresses': [spec['source']], 'interfaces': []}
+
+
+def _direct_network_values(deployment: dict) -> tuple[int, str]:
+    """Fail closed before passing retained metadata to Windows networking."""
+    try:
+        endpoint = urlsplit(deployment['endpoint'])
+        addresses = deployment['remote_addresses']
+        port = deployment['port']
+        if (deployment['scope'] != 'Direct' or type(port) is not int or not 1024 <= port <= 65535
+                or endpoint.scheme != 'https' or not endpoint.hostname or endpoint.port != port
+                or endpoint.username is not None or endpoint.password is not None
+                or endpoint.path or endpoint.query or endpoint.fragment
+                or deployment['host'] != ('::' if ':' in endpoint.hostname else '0.0.0.0')
+                or deployment.get('interfaces') != [] or not isinstance(addresses, list) or len(addresses) != 1):
+            raise ValueError
+        source = ipaddress.ip_address(addresses[0])
+        if str(source) != addresses[0] or source.is_unspecified or source.is_multicast:
+            raise ValueError
+        if source.is_loopback:
+            if not ipaddress.ip_address(endpoint.hostname).is_loopback:
+                raise ValueError
+        if (source.version == 6) != (deployment['host'] == '::'):
+            raise ValueError
+        return port, str(source)
+    except (ValueError, TypeError, KeyError):
+        raise OperationError('direct_network_invalid',
+                             'Direct access requires one literal desktop source IP matching the listener address family.', 400) from None
+
+
+def _direct_network(action: str, deployment: dict, program: Path | None = None, *, existing=False) -> None:
+    port, source = _direct_network_values(deployment)
+    root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent))
+    script = root / 'scripts' / 'direct-network.ps1'
+    powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    arguments = [str(powershell), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                 '-File', str(script), '-Action', action, '-Port', str(port), '-Source', source]
+    if program is not None:
+        arguments.extend(['-Program', str(program)])
+    if existing:
+        arguments.append('-Existing')
+    result = subprocess.run(arguments, capture_output=True, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if result.returncode:
+        raise OperationError('direct_firewall_required',
+                             'Direct firewall prerequisites failed. Check Windows Defender Firewall and the owned RDPMonitor direct rule; provider/router rules must be configured separately.', 503)
+
+
+def _check_direct_network(deployment: dict, *, existing=False) -> None:
+    import psutil
+    port, _ = _direct_network_values(deployment)
+    try:
+        occupied = any(connection.status == psutil.CONN_LISTEN and connection.laddr.port == port
+                       for connection in psutil.net_connections(kind='tcp'))
+    except (OSError, psutil.Error):
+        raise OperationError('direct_network_unavailable', 'Cannot inspect TCP listeners. Run elevated and check networking prerequisites.', 503) from None
+    if occupied:
+        raise OperationError('direct_port_in_use', 'The direct HTTPS port is already listening. Stop the conflicting service or prepare a command using another port.', 409)
+    _direct_network('Check', deployment, existing=existing)
+
+
+def _direct_input(path: Path) -> dict:
+    from .direct import parse_direct_setup_uri, resolve_desktop_source
+    invitation_file = path / 'invitation.txt'
+    verify_protected_tree(invitation_file, recursive=False)
+    if invitation_file.stat().st_size > 4096:
+        raise OperationError('direct_setup_invalid', 'Direct command exceeds the supported limit.')
+    spec = parse_direct_setup_uri(invitation_file.read_text(encoding='utf-8'))
+    source_file = path / 'direct-source.txt'
+    verify_protected_tree(source_file, recursive=False)
+    if source_file.stat().st_size > 45:
+        raise OperationError('direct_source_required', 'Prepare a new command with an explicit desktop source IP.')
+    spec['source'] = source_file.read_text(encoding='ascii')
+    spec['source'] = resolve_desktop_source(spec)
+    return spec
+
+
 def _decode_command(value: str | None) -> str:
     """Decode the bounded canonical transport without including it in errors."""
     from relay.protocol import parse_setup_invitation
+    from .direct import parse_direct_setup_uri
     if not isinstance(value, str) or not 1 <= len(value) <= 5462 or not re.fullmatch(r'[A-Za-z0-9_-]+', value):
         raise ValueError('Invalid command setup capability')
     try:
@@ -140,9 +231,12 @@ def _decode_command(value: str | None) -> str:
         if len(raw) > 4096 or base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=') != value:
             raise ValueError
         invitation = raw.decode('utf-8', errors='strict')
-        if invitation != invitation.strip() or not invitation.startswith('rdpmonitor://setup?'):
+        if invitation != invitation.strip():
             raise ValueError
-        parse_setup_invitation(invitation)
+        if invitation.startswith('rdpmonitor://direct?'):
+            parse_direct_setup_uri(invitation)
+        else:
+            parse_setup_invitation(invitation)
         return invitation
     except (ValueError, UnicodeError):
         raise ValueError('Invalid command setup capability') from None
@@ -151,6 +245,12 @@ def _decode_command(value: str | None) -> str:
 def import_command(session: str, value: str | None, *, unsigned_preview=False, preview_consent=False) -> None:
     # Validate before creating directories, reading SCM, or touching machine state.
     invitation = _decode_command(value)
+    direct = None
+    if invitation.startswith('rdpmonitor://direct?'):
+        from .direct import parse_direct_setup_uri, resolve_desktop_source
+        direct = parse_direct_setup_uri(invitation)
+        direct['source'] = resolve_desktop_source(direct)
+        _check_direct_network(_direct_metadata(direct))
     if unsigned_preview and not preview_consent:
         raise PermissionError('Unsigned command setup requires explicit monitoring-only consent')
     if not re.fullmatch(r'[0-9a-f]{32}', session):
@@ -159,6 +259,8 @@ def import_command(session: str, value: str | None, *, unsigned_preview=False, p
     path = _session(session, create=True)
     try:
         _write(path / 'invitation.txt', invitation)
+        if direct is not None:
+            _write(path / 'direct-source.txt', direct['source'])
         _write(path / 'command.txt', '1')
         _write(path / 'registered.txt', '0')
     except Exception:
@@ -186,7 +288,8 @@ def prepare(session: str) -> None:
     _protected_directory(install_directory() / 'releases', code=True)
     deployment = _deployment()
     _write(path / 'release.txt', deployment['release'] if deployment else '')
-    _write(path / 'registered.txt', '1' if (data_directory() / 'gateway' / 'relay.json').exists() else '0')
+    _write(path / 'registered.txt', '1' if deployment or (data_directory() / 'gateway' / 'relay.json').exists() else '0')
+    _write(path / 'direct.txt', '1' if deployment and deployment.get('scope') == 'Direct' else '0')
     _write(path / 'readonly.txt', '1' if deployment and deployment.get('read_only') else '0')
     _write(path / 'ready.txt', '1')
 
@@ -222,6 +325,9 @@ def stage(session: str, version: str, unsigned_preview: bool, *, cmd_bootstrap=F
         _command_session(path)
         invitation = (path / 'invitation.txt').read_text(encoding='utf-8')
         _decode_command(base64.urlsafe_b64encode(invitation.encode('utf-8')).decode('ascii').rstrip('='))
+        if invitation.startswith('rdpmonitor://direct?'):
+            direct = _direct_input(path)
+            _check_direct_network(_direct_metadata(direct))
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Invalid release version')
     deployment = _deployment()
@@ -362,6 +468,14 @@ def pair(session: str) -> None:
         raise ValueError('No installed deployment')
     verify_protected_tree(Path(deployment['release']))
     _ready(deployment)
+    if deployment.get('scope') == 'Direct':
+        result = WorkerProxy().rpc('pairing.begin', {'ttl_seconds': 300, 'role': 'viewer'})
+        _write(path / 'connection.txt', f"HTTPS address: {deployment['endpoint']}\nSHA256 fingerprint: {result['fingerprint']}\nOne-use pairing code: {result['code']}")
+        _write(path / 'expires.txt', str(result['expires']))
+        _write(path / 'automatic.txt', '0')
+        _write(path / 'direct.txt', '1')
+        _write(path / 'status.txt', 'Manual direct approval created. Use Advanced direct HTTPS on the desktop and verify this fingerprint. Viewer only; private, single-use, expires in five minutes. The existing desktop source firewall restriction remains unchanged.')
+        return
     from .relay import publish_connection_code
     from relay.protocol import decode_secret
     key_file = path / 'pairing-key.txt'
@@ -395,8 +509,22 @@ def install(args) -> None:
             raise PermissionError('Command setup is monitoring-only')
     if args.unsigned_preview and not args.preview_consent:
         raise PermissionError('Unsigned preview requires explicit affirmative monitoring-only consent')
-    invitation, pairing_secret = _installation_input(path)
-    if command and (invitation is None or pairing_secret is None):
+    deployment = _deployment()
+    direct = None
+    if (path / 'direct-source.txt').exists():
+        if not command:
+            raise ValueError('Direct provisioning requires the fresh guest command path')
+        direct = _direct_input(path)
+        _check_direct_network(_direct_metadata(direct))
+        invitation, pairing_secret = None, None
+    elif deployment and deployment.get('scope') == 'Direct':
+        if (path / 'invitation.txt').exists():
+            raise ValueError('Repair cannot replace the installed direct identity')
+        invitation, pairing_secret = None, None
+        _check_direct_network(deployment, existing=True)
+    else:
+        invitation, pairing_secret = _installation_input(path)
+    if command and direct is None and (invitation is None or pairing_secret is None):
         raise ValueError('Command setup requires an automatic HTTPS setup invitation')
     package = args.package.absolute()
     if package.parent != install_directory() / 'releases':
@@ -411,7 +539,6 @@ def install(args) -> None:
         raise ValueError('Guest package contains a desktop client')
     if manifest['version'] != package.name:
         raise ValueError('Manifest version differs from protected release directory')
-    deployment = _deployment()
     if deployment and (deployment['release'] != str(package) or bool(deployment.get('unsigned_preview')) != args.unsigned_preview
                        or deployment.get('component', 'suite') != component):
         raise ValueError('Installed identity/trust cannot be replaced by the repair wizard')
@@ -422,6 +549,15 @@ def install(args) -> None:
                       'remote_addresses': [], 'interfaces': [], 'installed_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                       'unsigned_preview': args.unsigned_preview, 'read_only': bool(args.unsigned_preview or args.read_only),
                       'publisher_thumbprint': '' if args.unsigned_preview else args.publisher_thumbprint.replace(' ', '').upper()}
+    if direct is not None:
+        # Recheck freshness after package authentication, immediately before local
+        # identity creation. Provisioning itself also refuses retained state.
+        _require_fresh()
+        from .direct import provision_direct_bootstrap
+        deployment.update(provision_direct_bootstrap(data_directory(), direct))
+        deployment['read_only'] = True
+        (path / 'invitation.txt').unlink(missing_ok=True)
+        (path / 'direct-source.txt').unlink(missing_ok=True)
     if args.unsigned_preview or command:
         deployment['read_only'] = True
     _save_deployment(deployment)
@@ -437,10 +573,19 @@ def install(args) -> None:
         if pairing_secret is not None:
             from relay.protocol import encode_secret
             _write(path / 'pairing-key.txt', encode_secret(pairing_secret))
+    if deployment.get('scope') == 'Direct':
+        _direct_network('Configure', deployment, package / 'agent' / 'RDPMonitorAgent.exe', existing=direct is None)
     _entrypoint(package)
     _service_action('start')
     _ready(deployment)
-    pair(args.session)
+    if deployment.get('scope') == 'Direct':
+        _write(path / 'direct.txt', '1')
+        _write(path / 'automatic.txt', '1')
+        _write(path / 'connection.txt', '')
+        _write(path / 'expires.txt', '')
+        _write(path / 'status.txt', 'Direct guest installed and locally ready. Return to Add machine on the originating desktop to complete authentication. This is not confirmation of a desktop connection. If unreachable, allow this HTTPS port in your provider/router firewall for the same desktop source IP; no provider rules were changed.')
+    else:
+        pair(args.session)
 
 
 def remove(package: Path) -> None:
@@ -451,8 +596,23 @@ def remove(package: Path) -> None:
                     component=deployment.get('component', 'suite'))
     _service_action('remove')
     _entrypoint(package, remove=True)
+    if deployment.get('scope') == 'Direct':
+        _direct_network('Remove', deployment, existing=True)
     # Retain identities, enrolled devices, publisher trust, deployment recovery
-    # record, firewall policy and backup repositories. Inno removes only its files.
+    # record, unrelated firewall policy and backup repositories.
+
+
+_SAFE_DIRECT_ERRORS = {
+    'direct_setup_invalid': 'Invalid direct command. Prepare and copy a new command from the originating desktop.',
+    'direct_setup_expired': 'Direct command expired. Prepare a fresh command and check both clocks.',
+    'direct_source_required': 'No unique active RDP TCP peer was found. Set the advanced desktop source IP explicitly and prepare a new command.',
+    'direct_state_exists': 'This VM retains an identity. Use same-release maintenance; command setup never overwrites it.',
+    'direct_network_invalid': 'Use one literal desktop source IP with the same address family as the endpoint. DNS endpoints bind IPv4; IPv6 requires an explicit IPv6 endpoint and reachable source.',
+    'direct_network_unavailable': 'Cannot inspect listeners. Run elevated and check Windows networking prerequisites.',
+    'direct_port_in_use': 'The HTTPS port is already listening. Stop the conflicting service or prepare a command using another port.',
+    'direct_firewall_required': 'Check Windows Defender Firewall and the owned single-source direct rule. Configure provider/router reachability separately.',
+}
+_DIRECT_EXIT_CODES = {code: 70 + index for index, code in enumerate(_SAFE_DIRECT_ERRORS)}
 
 
 def main(argv=None) -> int:
@@ -487,7 +647,7 @@ def main(argv=None) -> int:
     command.add_argument('--package', type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == 'surface':
-        print(json.dumps({'protocol': 1, 'commands': ['prepare', 'import-command', 'stage', 'install', 'pair', 'cleanup', 'remove'],
+        print(json.dumps({'protocol': 2, 'commands': ['prepare', 'import-command', 'stage', 'install', 'pair', 'cleanup', 'remove'],
                           'secret_exchange': 'protected ProgramData setup session files', 'preview': 'forced read_only',
                           'command_setup': 'fresh guest component only; forced viewer'}))
         return 0
@@ -515,11 +675,13 @@ def main(argv=None) -> int:
     except Exception as exc:
         # Never stringify an exception from a network/crypto/file operation: it
         # may embed invitation fragments, response data or credentials.
-        print(f'RDPMonitor setup failed [{type(exc).__name__}]. No secret details were logged.', file=sys.stderr)
+        code = exc.code if isinstance(exc, OperationError) and exc.code in _SAFE_DIRECT_ERRORS else type(exc).__name__
+        detail = _SAFE_DIRECT_ERRORS.get(code, 'Resolve connectivity, signature, service or protected-state prerequisites before same-release maintenance.')
+        print(f'RDPMonitor setup failed [{code}]. {detail} No secret details were logged.', file=sys.stderr)
         if hasattr(args, 'session') and args.command != 'import-command':
             try:
                 path = _session(args.session)
-                _write(path / 'status.txt', f'Setup failed ({type(exc).__name__}). Registration/data were preserved. Repair or generate a fresh code after resolving connectivity/signature/service prerequisites.')
+                _write(path / 'status.txt', f'Setup failed [{code}]. {detail} Retained identities/data were not replaced. Do not treat this as a completed desktop connection.')
             except Exception:
                 pass
-        return 1
+        return _DIRECT_EXIT_CODES.get(code, 1)

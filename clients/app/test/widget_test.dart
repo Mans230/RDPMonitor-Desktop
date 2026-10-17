@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:rdpmonitor/main.dart' show MonitorApp;
 import 'package:rdpmonitor/api.dart';
 import 'package:rdpmonitor/state.dart';
 import 'package:rdpmonitor/views.dart';
@@ -51,5 +53,35 @@ void main() {
     expect(enabled, isNot(same(original)));
     expect(original['net_watch'], isFalse, reason: 'the live configuration map must not be mutated');
     expect(withNetworkWatch(original, false)['net_watch'], isFalse);
+  });
+  testWidgets('Open settings remain usable across the rail and drawer breakpoint', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(900, 900);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const MonitorApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Connection options'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Relay settings').last);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    for (final size in const [Size(390, 844), Size(900, 900), Size(390, 844)]) {
+      tester.view.physicalSize = size;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(tester.takeException(), isNull);
+      await tester.pumpAndSettle();
+      final dialog = tester.getRect(find.byType(Dialog));
+      expect(dialog.left, greaterThanOrEqualTo(0));
+      expect(dialog.top, greaterThanOrEqualTo(0));
+      expect(dialog.right, lessThanOrEqualTo(size.width));
+      expect(dialog.bottom, lessThanOrEqualTo(size.height));
+    }
+    await tester.tap(find.text('Close').last);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

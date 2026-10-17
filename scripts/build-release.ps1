@@ -10,7 +10,7 @@ param(
     [string]$Python = 'python.exe',
     [string]$Flutter = 'flutter.bat',
     [string]$SignTool = 'signtool.exe',
-    [int]$BuildNumber = 4,
+    [int]$BuildNumber = 5,
     [int]$DataSchema = 1,
     [int]$MinimumDataSchema = 1,
     [int]$MaximumDataSchema = 1,
@@ -18,6 +18,7 @@ param(
     [string]$GuestSetupSha256,
     [string]$GuestSetupMode,
     [string]$GuestPublisherThumbprint,
+    [ValidateSet(1,2)][int]$GuestSetupProtocol = 1,
     [string]$Output
 )
 $ErrorActionPreference = 'Stop'
@@ -25,7 +26,8 @@ $Root = Split-Path -Parent $PSScriptRoot
 if (-not $Output) { $Output = Join-Path $Root 'dist' }
 function Run([string]$Program,[string[]]$Arguments) { & $Program @Arguments; if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" } }
 if (-not $UnsignedPreview -and -not $GuestOnly -and $GuestSetupMode -ne 'production') { throw 'Production desktop builds require an explicit pinned production guest installer; preview guest defaults are not production trust.' }
-if ($GuestOnly -and ($GuestSetupUrl -or $GuestSetupSha256 -or $GuestSetupMode -or $GuestPublisherThumbprint)) { throw 'Guest bootstrap overrides apply only to desktop builds.' }
+if ($GuestOnly -and ($GuestSetupUrl -or $GuestSetupSha256 -or $GuestSetupMode -or $GuestPublisherThumbprint -or $PSBoundParameters.ContainsKey('GuestSetupProtocol'))) { throw 'Guest bootstrap overrides apply only to desktop builds.' }
+if ($PSBoundParameters.ContainsKey('GuestSetupProtocol') -and -not ($GuestSetupUrl -or $GuestSetupSha256 -or $GuestSetupMode -or $GuestPublisherThumbprint)) { throw 'Guest setup protocol requires explicit guest installer trust overrides.' }
 $thumbprint = ''
 $certificate = $null
 Get-Command $Python -ErrorAction Stop | Out-Null
@@ -61,7 +63,7 @@ if (-not $GuestOnly) {
         if ($guestInputs) {
             if ($GuestSetupUrl -notmatch '^https://' -or $GuestSetupSha256 -notmatch '^[0-9a-fA-F]{64}$' -or $GuestSetupMode -notin @('unsigned-preview','production')) { throw 'Guest bootstrap override requires an HTTPS URL, complete SHA256 and explicit unsigned-preview/production mode.' }
             if ($GuestSetupMode -eq 'production' -and $GuestPublisherThumbprint -notmatch '^[0-9a-fA-F]{40}$') { throw 'Production guest bootstrap requires its independently trusted publisher thumbprint.' }
-            $flutterArguments += @("--dart-define=RDP_GUEST_URL=$GuestSetupUrl","--dart-define=RDP_GUEST_SHA256=$($GuestSetupSha256.ToLowerInvariant())","--dart-define=RDP_GUEST_MODE=$GuestSetupMode","--dart-define=RDP_GUEST_PUBLISHER=$GuestPublisherThumbprint")
+            $flutterArguments += @("--dart-define=RDP_GUEST_URL=$GuestSetupUrl","--dart-define=RDP_GUEST_SHA256=$($GuestSetupSha256.ToLowerInvariant())","--dart-define=RDP_GUEST_MODE=$GuestSetupMode","--dart-define=RDP_GUEST_PUBLISHER=$GuestPublisherThumbprint","--dart-define=RDP_GUEST_SETUP_PROTOCOL=$GuestSetupProtocol")
         }
         Run $Flutter $flutterArguments
     } finally { Pop-Location }

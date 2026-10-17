@@ -19,7 +19,7 @@ Build the guest first, then pin the final signed native guest executable into th
 
 ```powershell
 $build = @{
-  Version = '1.0.0'; BuildNumber = 4
+  Version = '1.0.1'; BuildNumber = 5
   CertificateThumbprint = $PublisherThumbprint
   TimestampUrl = $TimestampServiceHttpsUrl
   VCRuntimeDirectory = $LicensedX64CrtDirectory
@@ -28,15 +28,15 @@ $build = @{
 }
 .\scripts\build-release.ps1 @build -GuestOnly -Output '.\dist\guest'
 .\scripts\build-installer.ps1 -GuestOnly `
-  -Package '.\dist\guest\RDPMonitorGuest-1.0.0-windows-x64' `
+  -Package '.\dist\guest\RDPMonitorGuest-1.0.1-windows-x64' `
   -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl `
   -Output '.\dist\guest\native'
-$GuestInstaller = '.\dist\guest\native\RDPMonitorGuest-1.0.0-windows-x64-setup.exe'
+$GuestInstaller = '.\dist\guest\native\RDPMonitorGuest-1.0.1-windows-x64-setup.exe'
 $GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
 # Publish these exact bytes, then set GuestSetupHttpsUrl to their immutable HTTPS URL.
 .\scripts\build-release.ps1 @build -Output '.\dist\desktop' `
   -GuestSetupUrl $GuestSetupHttpsUrl -GuestSetupSha256 $GuestSetupSha256 `
-  -GuestSetupMode production -GuestPublisherThumbprint $PublisherThumbprint
+  -GuestSetupMode production -GuestPublisherThumbprint $PublisherThumbprint -GuestSetupProtocol 2
 ```
 
 The guest bundles the frozen Python agent/runtime, lifecycle scripts and dependency/Microsoft notices, but no `client` directory or desktop shortcut. Its signed inventory declares `component: guest`; the desktop suite declares `component: suite`. Component changes are rejected during install, repair, signed update and rollback. Guest and suite are not co-installed on one Windows installation.
@@ -49,7 +49,7 @@ Build the optional advanced suite wizard around the complete authenticated deskt
 
 ```powershell
 .\scripts\build-installer.ps1 -AcquireCompiler
-.\scripts\build-installer.ps1 -Package '.\dist\desktop\RDPMonitor-1.0.0-windows-x64' `
+.\scripts\build-installer.ps1 -Package '.\dist\desktop\RDPMonitor-1.0.1-windows-x64' `
   -CertificateThumbprint $PublisherThumbprint -TimestampUrl $TimestampServiceHttpsUrl
 ```
 
@@ -59,30 +59,46 @@ For an explicitly unsigned evaluation build, use the separate parameter set and 
 
 ```powershell
 $preview = @{
-  UnsignedPreview = $true; Version = '1.0.0'; BuildNumber = 4
+  UnsignedPreview = $true; Version = '1.0.1'; BuildNumber = 5
   VCRuntimeDirectory = $LicensedX64CrtDirectory
   VCRedistributionNoticeFile = $MicrosoftRedistributionNotice
   Python = '.\.venv\Scripts\python.exe'
 }
 .\scripts\build-release.ps1 @preview -GuestOnly -Output '.\dist\preview-guest'
 .\scripts\build-installer.ps1 -GuestOnly -UnsignedPreview `
-  -Package '.\dist\preview-guest\RDPMonitorGuest-1.0.0-windows-x64-UNSIGNED-PREVIEW' `
+  -Package '.\dist\preview-guest\RDPMonitorGuest-1.0.1-windows-x64-UNSIGNED-PREVIEW' `
   -Output '.\dist\preview-guest\native'
-$GuestInstaller = '.\dist\preview-guest\native\RDPMonitorGuest-1.0.0-windows-x64-UNSIGNED-PREVIEW-setup.exe'
+$GuestInstaller = '.\dist\preview-guest\native\RDPMonitorGuest-1.0.1-windows-x64-UNSIGNED-PREVIEW-setup.exe'
 $GuestSetupSha256 = (Get-FileHash $GuestInstaller -Algorithm SHA256).Hash
 # Publish these exact bytes and set GuestSetupHttpsUrl before building their desktop.
 .\scripts\build-release.ps1 @preview -Output '.\dist\preview-desktop' `
   -GuestSetupUrl $GuestSetupHttpsUrl -GuestSetupSha256 $GuestSetupSha256 `
-  -GuestSetupMode unsigned-preview
+  -GuestSetupMode unsigned-preview -GuestSetupProtocol 2
 ```
 
-Checked-in desktop defaults pin the official Preview 4 guest asset. Rebuilt native installers need not be byte-identical: publish your rebuilt guest under your own immutable HTTPS URL and override URL/digest/mode together. The guest download URL must contain no credentials, query, fragment or CMD metacharacters. The builder enforces CMD's 8191-character limit; a very long relay origin or release URL fails explicitly.
+Checked-in desktop defaults pin the official Preview 5 guest asset and secure direct setup protocol **2**. Rebuilt installers need not be byte-identical: publish your own exact guest bytes under an immutable HTTPS URL and override URL/digest/mode/protocol together. A protocol-1 guest cannot provision direct setup, so command copying fails closed rather than downloading the old relay-only guest. Download URLs must contain no credentials, query, fragment or CMD metacharacters. Commands above CMD's 8191-character limit fail explicitly.
 
 Unsigned checksums establish integrity, not publisher authenticity. Preview setup requires explicit evaluation consent and cannot enable administration, protection or schedules; use a disposable Windows VM first. The source agent CLI is separate from installed preview policy: source evaluation must explicitly use `--read-only`.
 
 ## Install a VM with one CMD command
 
-### One-time relay deployment
+### Direct setup — normal Add machine
+
+1. Run the native desktop on the watcher PC. Choose **Add machine**, enter name, optional group and the VM's reachable IP/hostname. HTTPS defaults to TCP **8443**; an explicit port from 1024–65535 is supported.
+2. Normally leave source selection automatic: the VM must have exactly one established non-loopback TCP peer on its configured RDP listener. RDP gateways, browser/provider consoles, multiple peers or another watcher PC require **Advanced: desktop source IP**, with the watcher's single literal address. IPv6-only VMs need an IPv6 literal endpoint; DNS endpoints use an IPv4 listener.
+3. Choose **Prepare command**, explicitly accept the unsigned monitoring-only notice when applicable, then **Copy CMD command**. The same intent, two separate private keys and 30-minute deadline are retained in protected desktop storage.
+4. Paste the one line into an existing **Administrator Command Prompt** inside the fresh Windows VM. No wizard, pairing-code entry, app on the guest or return code. The bootstrap downloads/verifies the pinned guest-only executable and silently installs the worker/gateway services.
+5. Leave Add machine open. The VM locally creates its own CA and preissues one viewer certificate to the desktop's CSR. The desktop verifies the prepared VM transport key and public bundle, proves ordinary CA/hostname-verified mTLS against a protected endpoint, saves the machine, then retires bootstrap publication using that exact certificate.
+
+**Reachability is required, not manufactured.** The VM binds its chosen HTTPS port and adds a Windows rule limited to the guest executable, TCP port and one detected/explicit source. Firewall service/profiles must be enabled with effective default inbound Block and permit the owned local rule; setup does not rewrite unrelated policy. Other existing allow rules can broaden network access, so certificate authentication remains essential. Permit the same source/port in provider security groups/router forwarding as needed. This installer has no provider credentials and cannot open those controls. A changing desktop public IP requires separately authorized source maintenance; it never expands to Any automatically.
+
+The command contains the initial VM transport private key, public desktop CSR and random bootstrap nonce, **not** the desktop client private key or VM CA key. Protect clipboard/history and never pass it as `cmd /c` arguments. Private values travel through environment and an administrator/SYSTEM-protected native exchange, never download URLs or helper arguments. Both signed and unsigned direct CMD installation force viewer/read-only. IP/nonce/public-certificate knowledge cannot authenticate another desktop, and no pairing window is opened.
+
+Close/reopen Add machine to resume its protected waiting/issued/saved state. A failed protected probe reuses the issued certificate. A storage write that committed before reporting failure is reconciled into the live fleet on retry, preserving saved display/contract metadata and one identity. A saved profile with failed acknowledgement remains usable and can finish acknowledgement after the setup deadline. Discard removes only local pending state; it does not revoke a remote device or uninstall an agent.
+
+The command is **fresh-install-only**. Retained/partial identity, services or deployment state are not replaced. If a VM was installed but its unclaimed bootstrap expired, use the matching native guest installer's **Pair installed agent**, then the desktop's **Pair installed agent (direct HTTPS)** and locally verified endpoint/fingerprint/code. This is explicit local recovery, not another fresh command. Same-release repair preserves identity and direct scope; repair is not a cross-preview upgrade. Keep provider console access for first installation.
+
+### Optional relay — one-time deployment
 
 The operator supplies an internet-reachable server, Docker/Compose, a DNS hostname, ports **80/443 on the relay server**, an ACME contact email and a private administration key. No inbound management port is opened on the Windows VMs. A container build or HTTPS domain is not supplied by GitHub Releases.
 
@@ -102,11 +118,11 @@ Run one broker process per database. Exclusive database locking rejects an indep
 
 For non-container deployments, install `relay/requirements.txt`, set private `RDP_RELAY_ADMIN_KEY` and `RDP_RELAY_PUBLIC_ORIGIN`, and run `python -m relay` behind a correctly configured HTTPS reverse proxy. Use the supplied launcher/native WebSocket protocol: a generic `uvicorn relay.server:...` configuration does not provide the required hard socket teardown. Expose the plaintext listener only to the trusted proxy; never trust wildcard forwarded-header sources.
 
-### Operator desktop and VM setup
+### Optional relay — operator desktop and VM setup
 
-1. Run the native desktop as the operator. Open **Relay settings**, enter the HTTPS origin and administration key, and choose **Save & load routes**. Both settings are held in OS-protected storage.
-2. Choose **Add machine**, enter its name and optional group, and create its installation command. A single pending installation is retained in OS-protected storage; close/reopen Add machine to resume it.
-3. Approve the explicit unsigned monitoring-only evaluation notice when applicable, then choose **Copy CMD command**. Inside the VM open **Command Prompt as Administrator**—CMD, not PowerShell—paste the one line and press Enter.
+1. Open **Relay settings**, enter the supplied relay's HTTPS origin and administration key, then **Save & load routes**. Both settings are held in OS-protected storage.
+2. Choose **Install through relay (advanced)** from the connection menu, enter name/group and create its installation command. Its separate protected pending intent resumes by reopening that advanced flow.
+3. Approve the unsigned evaluation notice when applicable, then **Copy CMD command**. Paste into Administrator CMD inside the fresh VM.
 4. The bundled public bootstrap downloads the native **guest-only** installer over validated HTTPS into a unique administrator/SYSTEM-protected cache, checks the app-pinned SHA256 and production Authenticode publisher when applicable, then installs silently. No VM wizard, separate setup-code entry or desktop app on the guest is needed. No downloaded script is executed.
 5. The desktop polls for encrypted VM approval, verifies its pinned identity, enrolls and probes ordinary mTLS automatically. **Do not copy another code back.** Normal CMD provisioning always forces monitoring-only/viewer, even in signed builds. Administrative access remains an advanced signed interactive flow requiring separate affirmative local consent.
 
@@ -118,7 +134,7 @@ Only trusted public bootstrap code appears in PowerShell arguments. Native setup
 
 The command is for **fresh provisioning**, not repair: retained identity/deployment/relay state or registered services cause rejection rather than silently replacing an existing machine. For advanced recovery, reopen the matching native guest installer and choose **Pair installed agent** or **Repair the same release**. Pairing generates a fresh private manual connection code without reusing a consumed invitation; same-release repair preserves identity, enrolled devices, routing, data and deployment mode. Version/trust/component changes are not an unsigned repair path. A failed post-install helper returns native setup code `42` instead of claiming a completed connection; use the retained protected runtime for recovery.
 
-Normal installation invitations last 15 minutes. Waiting is serialized at three-second intervals and stops after the installation window plus at most five minutes for a VM that already registered. Closing the waiting dialog keeps its intent/key in protected storage; discard explicitly removes only that local pending state, not a remote invitation, route or certificate. Enrollment is not silently replayed after an ambiguous one-use POST. Once a device identity is received, both normal setup and advanced recovery checkpoint it before the final mTLS probe; retry verifies/saves that identity instead of issuing another certificate. Enrollment response bodies are bounded to 128 KiB and a 30-second read deadline.
+Relay installation invitations last 15 minutes. Waiting is serialized at three-second intervals and stops after the invitation window plus at most five minutes for an already registered VM. Closing the advanced relay dialog retains its protected intent; discard removes only that local state. Ambiguous one-use enrollment is not silently replayed. Issued manual/relay identities are checkpointed before final mTLS probing; bounded response bodies and deadlines prevent indefinite busy enrollment. Direct setup uses its separate 30-minute preissued-key protocol described above.
 
 Use a fresh disposable VM for this unsigned evaluation payload. **Repair means the same published release**, not an unsigned cross-preview/version upgrade or trust migration. Existing installed agents can still generate a fresh manual code through Pair installed agent.
 
@@ -131,11 +147,16 @@ The default single-broker bounds are 256 retained agent identities (including re
 
 ### Machine inventory and command layout
 
-The Machines table groups profiles and supports name/group search, connection-state filters, expiry-due and renewal-due filters. Disk values come from authenticated agent snapshots; retained measurements are labeled stale, and missing values are not replaced by zero. Hover the disk cell for all reported volumes and the measurement time. Scroll each table horizontally when the sidebar or window leaves insufficient room.
+The Machines table groups profiles and supports name/group/address/role search, connection-state filters, expiry-due and renewal-due filters. Fleet summary counts and contact times use the loaded agent state. Disk values come from authenticated snapshots; retained measurements are labeled stale, and missing values are not replaced by zero. Hover the disk cell for all reported volumes and measurement time. Rich tables scroll internally where needed and become labelled stacked records below an accessibility-adjusted 560 logical pixels of available content width.
 
 **Edit profile and contract** controls the display name/group, optional contract expiry/renewal dates, cost estimate, three-letter currency and monthly/yearly/one-time period. Decimal input is stored as integer hundredths, not floating point. The date-only action edits billing reminders, not device credentials. Metadata remains local in OS-protected storage and survives certificate renewal. Direct HTTPS address editing is under Connection; relay identities remain read-only. Unloaded/unreadable secure profiles cannot be overwritten by fleet mutations.
 
-Backups and Recovery are separate navigation destinations, as are Processes and Services. Commands are grouped by related task, searchable and still governed by agent capabilities/confirmation. Card columns use actual available logical content width (including text scaling), not just monitor width. The wide sidebar can be hidden/reopened; below the desktop breakpoint the same destinations live in a scrollable drawer.
+**Backups & recovery** contains separate Backups and Recovery tabs; **Processes & services** likewise retains both sets of tools. Searchable command groups use compact bordered rows, capability tags and explicit confirmation/read-only indicators. The agent remains the authority for every operation. **Run operation** opens a searchable picker for the selected machine rather than running a default command.
+
+At 1100 logical pixels and above, navigation uses the full labelled sidebar. From 560 to 1099 it uses an icon rail; below 560 it becomes a scrollable drawer. Hide/show remains available on desktop. Phone dialogs occupy the available height, scroll their content and stack full-width actions. Dialogs remain usable while resizing across these breakpoints.
+
+**Pause telemetry** stops automatic client polling, not the Windows agent, its schedules, notifications or jobs. Already active requests can finish, explicit refresh still works, and Resume triggers a fresh read. Contact and sample timestamps continue aging; paused or retained values are not a current health guarantee.
+
 
 
 ### Local relay development
@@ -177,7 +198,7 @@ $agent = Join-Path $deployment.release 'agent\RDPMonitorAgent.exe'
 & $agent pair --role owner
 ```
 
-Open **RDPMonitor** from the Start Menu as a normal user. For this direct method choose **Advanced: direct HTTPS** from the connection menu and enter the endpoint, one-use pairing code and exact SHA256 server fingerprint printed locally. Compare the fingerprint over a trusted channel. Client private keys stay in OS-protected storage. Enrollment role is approved locally, never chosen by a remote enrollment request.
+Open **RDPMonitor** from the Start Menu as a normal user. Choose **Pair installed agent (direct HTTPS)** from the connection menu and enter the endpoint, one-use pairing code and exact SHA256 server fingerprint printed locally. Compare the fingerprint over a trusted channel. Client private keys stay in OS-protected storage. Enrollment role is approved locally, never chosen by a remote enrollment request. Installed direct CMD monitoring policy remains viewer/read-only; manual recovery does not promote it to administration.
 
 For DNS/private endpoint changes, approve the complete desired SAN set locally before pairing:
 

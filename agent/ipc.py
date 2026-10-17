@@ -16,6 +16,7 @@ DEFAULT_PIPE = r"\\.\pipe\RDPMonitor.Worker.v1"
 GATEWAY_ACCOUNT = r"NT SERVICE\RDPMonitorGateway"
 MAX_MESSAGE = 1024 * 1024
 RPC_METHODS = frozenset({"health", "catalog", "snapshot", "history", "pairing.enroll",
+    "direct.bootstrap", "direct.complete",
     "devices.list", "devices.revoke", "devices.renew", "confirmations.prepare", "jobs.submit", "jobs.list",
     "jobs.get", "jobs.cancel", "events.list", "events.ack", "audit.list", "artifacts.get",
     "artifacts.read", "config.get", "config.set", "uploads.begin", "uploads.write", "uploads.status",
@@ -348,7 +349,7 @@ class IntegratedProxy:
         if method not in RPC_METHODS:
             raise OperationError("rpc_method", "Unknown gateway method.", 404)
         actor = self.runtime.security.authenticate(peer_der) if peer_der else None
-        if actor is None and method not in {"health", "pairing.enroll"}:
+        if actor is None and method not in {"health", "pairing.enroll", "direct.bootstrap"}:
             raise OperationError("certificate_required", "Client certificate required.", 401)
         return self.runtime.rpc(method, params or {}, actor)
 

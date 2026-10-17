@@ -171,6 +171,6 @@ class _DesktopSettingsDialogState extends State<_DesktopSettingsDialog> {
         ]),
       ],
     ))),
-    actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Done'))],
+    actions: [monitorDialogActions(context, [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Done'))])],
   );
 }

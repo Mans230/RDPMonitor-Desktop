@@ -48,7 +48,7 @@ try {
     Invoke-Checked $agent @('service-register')
     # Keep firewall scope unchanged, but the Program rule must target the new
     # signed immutable executable. No RDP/panic/block rules are modified.
-    if ($previous.scope -eq 'Private') { Set-NetFirewallRule -Name 'RDPMonitor-Gateway-Private' -Program $agent }
+    Set-OwnedGatewayProgram $previous $agent
     Start-AgentServices
     # SCM Running is not application readiness. The local authenticated IPC health
     # command must prove both worker and gateway are serving before committing.
@@ -74,7 +74,7 @@ try {
         Set-ProtectedDirectory $DataRoot
         Save-Deployment $previous
         Invoke-Checked (Join-Path $previous.release 'agent\RDPMonitorAgent.exe') @('service-register')
-        if ($previous.scope -eq 'Private') { Set-NetFirewallRule -Name 'RDPMonitor-Gateway-Private' -Program (Join-Path $previous.release 'agent\RDPMonitorAgent.exe') }
+        Set-OwnedGatewayProgram $previous (Join-Path $previous.release 'agent\RDPMonitorAgent.exe')
         Start-AgentServices
         $state.state = 'rolled-back'; Save-UpdateState
     } catch {

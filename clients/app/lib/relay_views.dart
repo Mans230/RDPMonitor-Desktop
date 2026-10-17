@@ -17,7 +17,7 @@ Future<void> showRelaySettingsDialog(BuildContext context) => showDialog<void>(
   builder: (_) => const _RelaySettingsDialog(),
 );
 
-Future<void> showAddMachineDialog(BuildContext context, {
+Future<void> showRelayInstallDialog(BuildContext context, {
   required Future<void> Function(MachineProfile) onEnrolled,
 }) => showDialog<void>(
   context: context, barrierDismissible: false,
@@ -62,13 +62,13 @@ Future<bool> _confirmDestructive(BuildContext context, String title, String text
   await showDialog<bool>(context: context, builder: (dialog) => AlertDialog(
     icon: const Icon(Icons.warning_amber_outlined), title: Text(title),
     content: SizedBox(width: 460, child: SingleChildScrollView(child: Text(text))),
-    actions: [
+    actions: [monitorDialogActions(dialog, [
       TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Cancel')),
       FilledButton(
         style: FilledButton.styleFrom(backgroundColor: Theme.of(dialog).colorScheme.error),
         onPressed: () => Navigator.pop(dialog, true), child: Text(action),
       ),
-    ],
+    ])],
   )) ?? false;
 
 class _RelaySettingsDialog extends StatefulWidget {
@@ -244,7 +244,7 @@ class _RelaySettingsDialogState extends State<_RelaySettingsDialog> {
         if (_busy) const Padding(padding: EdgeInsets.only(top: 14), child: LinearProgressIndicator()),
       ],
     )))),
-    actions: [TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Close'))],
+    actions: [monitorDialogActions(context, [TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Close'))])],
   ));
 }
 
@@ -569,7 +569,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
           if (_busy || _waiting) const Padding(padding: EdgeInsets.only(top: 14), child: LinearProgressIndicator()),
         ],
       )))),
-      actions: [
+      actions: [monitorDialogActions(context, [
         if (pending != null) TextButton(onPressed: _busy || _mustKeepOpen ? null : _discard, child: const Text('Discard setup')),
         TextButton(onPressed: _busy || _mustKeepOpen ? null : _close,
           child: Text(pending == null ? 'Cancel' : 'Close')),
@@ -579,7 +579,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
           FilledButton(onPressed: _busy ? null : _retrySaving, child: Text(_issued != null ? 'Verify & save identity' : 'Retry secure storage'))
         else if (pending.stage == RelaySetupStage.waiting && !_waiting && pending.canWait())
           FilledButton(onPressed: _busy ? null : _startWaiting, child: const Text('Resume waiting')),
-      ],
+      ])],
     ));
   }
 }
@@ -721,11 +721,11 @@ class _ConnectCodeDialogState extends State<_ConnectCodeDialog> {
         if (_busy) const Padding(padding: EdgeInsets.only(top: 14), child: LinearProgressIndicator()),
       ],
     )))),
-    actions: [
+    actions: [monitorDialogActions(context, [
       if (_enrolled != null) TextButton(onPressed: _busy ? null : _discard, child: const Text('Discard recovery record')),
       TextButton(onPressed: _busy || _mustKeepOpen ? null : () => Navigator.pop(context), child: const Text('Close')),
       FilledButton(onPressed: _busy ? null : _ready ? _submit : _loadIssued,
         child: Text(!_ready ? 'Retry loading identity' : _admitted ? 'Finish cleanup' : _enrolled == null ? 'Verify & enroll' : 'Verify & save identity')),
-    ],
+    ])],
   ));
 }

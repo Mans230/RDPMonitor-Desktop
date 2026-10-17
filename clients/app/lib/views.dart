@@ -70,12 +70,12 @@ class DataTree extends StatelessWidget {
         children: [DataTree(value: data, name: key)],
       );
     }
-    final heading = Text(label(key), style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13));
+    final heading = Text(label(key), style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12));
     final content = SelectableText(data?.toString() ?? 'Not reported', style: const TextStyle(fontFeatures: monitorFigures));
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       decoration: BoxDecoration(border: Border(bottom: BorderSide(color: scheme.outlineVariant.withValues(alpha: .5)))),
-      child: LayoutBuilder(builder: (context, bounds) => bounds.maxWidth < 360
+      child: LayoutBuilder(builder: (context, bounds) => MediaQuery.sizeOf(context).width < 560 || bounds.maxWidth < 360
         ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [heading, const SizedBox(height: 4), content])
         : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 2, child: heading), const SizedBox(width: 18), Expanded(flex: 3, child: content)])),
     );
@@ -113,20 +113,20 @@ class _OverviewState extends State<Overview> {
     final visible = cutoff == null ? valid : valid.where((row) => !instant(row['ts'])!.isBefore(cutoff)).toList();
     final resources = MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const SectionHeader(title: 'Resource load', subtitle: 'Latest agent measurement'),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       LayoutBuilder(builder: (context, bounds) {
         final processor = _resource(context, 'CPU utilization', unit(cpu['pct'], '%'), '${cpu['cores'] ?? 'Unreported'} logical cores', cpu['pct'], prominent: true);
         final memory = _resource(context, 'Memory', unit(ram['pct'], '%'), '${bytes(ram['used'])} used of ${bytes(ram['total'])}', ram['pct']);
         return bounds.maxWidth < 460
-          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [processor, const SizedBox(height: 26), memory])
-          : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 3, child: processor), const SizedBox(width: 32), Expanded(flex: 2, child: memory)]);
+          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [processor, const SizedBox(height: 12), memory])
+          : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: processor), const SizedBox(width: 12), Expanded(child: memory)]);
       }),
-      const SizedBox(height: 18),
+      const SizedBox(height: 12),
       MetricChart(history: visible, series: const ['cpu', 'ram'], title: 'Utilization history', percent: true),
     ]));
     final facts = MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const SectionHeader(title: 'Machine facts', subtitle: 'Reported by this agent'),
-      const SizedBox(height: 14),
+      const SizedBox(height: 12),
       DataTree(value: {
         'uptime': _uptime(snapshot['uptime']),
         'sessions': snapshot['sessions'] is List ? (snapshot['sessions'] as List).length : null,
@@ -134,7 +134,7 @@ class _OverviewState extends State<Overview> {
         'read_only_mode': snapshot['read_only'] ?? machine.health['read_only'],
       }),
       if (object(snapshot['protection']).isNotEmpty) ...[
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         Text('Protection signals', style: theme.textTheme.titleSmall),
         DataTree(value: snapshot['protection']),
       ],
@@ -150,17 +150,17 @@ class _OverviewState extends State<Overview> {
         subtitle: machine.profile.name,
         action: StatusPill(label: machine.freshness, tone: _tone(machine.freshness), icon: machine.freshness == 'Live' ? Icons.sensors_outlined : Icons.schedule_outlined),
       ),
-      const SizedBox(height: 18),
+      const SizedBox(height: 12),
       Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(color: theme.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: theme.colorScheme.surfaceContainer, border: Border.all(color: theme.colorScheme.outlineVariant), borderRadius: BorderRadius.circular(4)),
         child: Wrap(spacing: 14, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
           Text('Snapshot measured', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           SelectableText(timestamp(snapshot['ts']), style: theme.textTheme.titleSmall?.copyWith(fontFeatures: monitorFigures)),
           if (machine.freshness != 'Live') Text('${machine.freshness}: retained sample, not a current health guarantee.', style: theme.textTheme.bodySmall),
         ]),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 8),
       Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
         Text('Loaded history', style: theme.textTheme.titleSmall),
         ChoiceChip(label: const Text('All loaded'), selected: selected == null, onSelected: (_) => setState(() => rangeMinutes = null)),
@@ -169,18 +169,18 @@ class _OverviewState extends State<Overview> {
       const SizedBox(height: 8),
       Tooltip(message: 'These ranges filter loaded measurements only; earlier history is not fetched.', child: Text(valid.isEmpty ? 'No timestamped history loaded.' : '${visible.length} of ${valid.length} loaded samples · ${timestamp(valid.first['ts'])} — ${timestamp(valid.last['ts'])}', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant))),
       if (machine.errors['history'] != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text('History refresh unavailable. Showing retained measurements.', style: TextStyle(color: theme.colorScheme.error))),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       LayoutBuilder(builder: (context, bounds) => bounds.maxWidth < 800
-        ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [resources, const SizedBox(height: 16), facts])
-        : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 7, child: resources), const SizedBox(width: 18), Expanded(flex: 4, child: facts)])),
-      const SizedBox(height: 18),
+        ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [resources, const SizedBox(height: 8), facts])
+        : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 7, child: resources), const SizedBox(width: 8), Expanded(flex: 4, child: facts)])),
+      const SizedBox(height: 8),
       MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         SectionHeader(
           title: 'Network',
           subtitle: 'Reachability, transfer rates and interface state',
           action: reach.isEmpty ? null : StatusPill(label: networkStateLabel(reach['state']), tone: networkStateTone(reach['state']), icon: networkStateIcon(reach['state'])),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         if (reach.isEmpty)
           const Text('Reachability monitoring has not reported yet. The agent probes the configured target about once a minute while net_watch is enabled.')
         else
@@ -191,20 +191,20 @@ class _OverviewState extends State<Overview> {
             if (reach['state'] == 'down') 'outage_started': timestamp(reach['down_since']),
             if (reach['state'] == 'up' && (reach['seconds_down'] is num) && (reach['seconds_down'] as num) > 0) 'last_outage_seconds': reach['seconds_down'],
           }),
-        const SizedBox(height: 14),
+        const SizedBox(height: 8),
         const Divider(height: 1),
         NetworkWatchControl(machine: machine),
-        const SizedBox(height: 18),
-        Wrap(spacing: 38, runSpacing: 16, children: [
+        const SizedBox(height: 12),
+        Wrap(spacing: 24, runSpacing: 8, children: [
           _networkValue(context, 'Receive', snapshot['down_bps'], Icons.south_outlined),
           _networkValue(context, 'Send', snapshot['up_bps'], Icons.north_outlined),
         ]),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
         MetricChart(history: visible, series: const ['down_bps', 'up_bps'], title: 'Throughput history'),
         const SizedBox(height: 10),
         DataTree(value: {'total_received': bytes(snapshot['bytes_received']), 'total_sent': bytes(snapshot['bytes_sent']), 'interfaces': snapshot['nics']}),
       ])),
-      const SizedBox(height: 18),
+      const SizedBox(height: 8),
       LayoutBuilder(builder: (context, bounds) {
         final disks = MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           const SectionHeader(title: 'Storage', subtitle: 'Reported volumes'),
@@ -220,10 +220,10 @@ class _OverviewState extends State<Overview> {
         ]));
         final recent = _recent(context, machine);
         return bounds.maxWidth < 850
-          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [disks, const SizedBox(height: 18), recent])
-          : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 4, child: disks), const SizedBox(width: 18), Expanded(flex: 6, child: recent)]);
+          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [disks, const SizedBox(height: 8), recent])
+          : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(flex: 4, child: disks), const SizedBox(width: 8), Expanded(flex: 6, child: recent)]);
       }),
-      const SizedBox(height: 18),
+      const SizedBox(height: 8),
       MonitorPanel(padding: EdgeInsets.zero, child: ExpansionTile(
         title: const Text('Raw agent snapshot'),
         subtitle: const Text('Inspect all reported fields and component errors'),
@@ -234,11 +234,11 @@ class _OverviewState extends State<Overview> {
   }
   Widget _resource(BuildContext context, String title, String value, String detail, dynamic percent, {bool prominent = false}) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Text(title, style: Theme.of(context).textTheme.labelLarge?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
-    const SizedBox(height: 10),
-    Text(value, style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontSize: value == 'Not reported' ? 24 : prominent ? 56 : 38, letterSpacing: -1.8, fontFeatures: monitorFigures)),
-    const SizedBox(height: 9),
+    const SizedBox(height: 8),
+    Text(value, style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontSize: value == 'Not reported' ? 20 : 34, letterSpacing: -1, fontFeatures: monitorFigures)),
+    const SizedBox(height: 8),
     Text(detail, style: Theme.of(context).textTheme.bodySmall),
-    const SizedBox(height: 14),
+    const SizedBox(height: 8),
     if (_number(percent) != null) LinearProgressIndicator(value: (_number(percent)! / 100).clamp(0.0, 1.0).toDouble(), minHeight: 4),
   ]);
   Widget _networkValue(BuildContext context, String title, dynamic value, IconData icon) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -253,7 +253,7 @@ class _OverviewState extends State<Overview> {
     ]..sort((a, b) => (instant((b['data'] as Map)['created']) ?? DateTime(1970)).compareTo(instant((a['data'] as Map)['created']) ?? DateTime(1970)));
     return MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const SectionHeader(title: 'Recent activity', subtitle: 'Latest loaded jobs and events · full controls in Activity'),
-      const SizedBox(height: 14),
+      const SizedBox(height: 12),
       if (machine.errors.containsKey('jobs') || machine.errors.containsKey('events')) const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('Activity refresh unavailable; retained records may be stale.')),
       if (recent.isEmpty) const Text('No jobs or events returned by this agent.'),
       for (final item in recent.take(5)) Builder(builder: (context) {
@@ -409,7 +409,7 @@ class MetricChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final valid = history.where((row) => instant(row['ts']) != null).toList()..sort((a, b) => instant(a['ts'])!.compareTo(instant(b['ts'])!));
     final scheme = Theme.of(context).colorScheme;
-    final colors = [scheme.primary, scheme.onSurfaceVariant];
+    final colors = [scheme.onSurface, scheme.onSurfaceVariant];
     final values = [for (final row in valid) for (final key in series) if (_number(row[key]) != null) _number(row[key])!];
     final maximum = percent ? 100.0 : values.isEmpty ? 1.0 : math.max(1.0, values.reduce(math.max) * 1.1);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -551,8 +551,10 @@ class _OperationDialogState extends State<OperationDialog> {
   }
   @override
   Widget build(BuildContext context) => PopScope(canPop: !busy, child: AlertDialog(
+    actionsPadding: const EdgeInsets.all(12),
+    actionsOverflowButtonSpacing: 8,
     title: Text(widget.operation['title']?.toString() ?? widget.operation['id']), content: SizedBox(width: 600, child: SingleChildScrollView(child: Form(key: form, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-      MonitorPanel(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      MonitorPanel(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Target machine', style: Theme.of(context).textTheme.labelMedium),
         const SizedBox(height: 5),
         Text(widget.machine.profile.name, style: Theme.of(context).textTheme.titleLarge),
@@ -563,17 +565,17 @@ class _OperationDialogState extends State<OperationDialog> {
           StatusPill(label: '${label(widget.operation['capability']?.toString() ?? 'Agent')} capability', icon: Icons.key_outlined),
         ]),
       ])),
-      const SizedBox(height: 18),
-      Text(widget.operation['description']?.toString() ?? ''), const SizedBox(height: 20),
+      const SizedBox(height: 12),
+      Text(widget.operation['description']?.toString() ?? ''), const SizedBox(height: 12),
       if (widget.machine.health['read_only'] == true) const Padding(padding: EdgeInsets.only(bottom: 14), child: Text('Read-only safety mode: the agent refuses mutations. View operations remain available.')),
       if (unavailable) const Padding(padding: EdgeInsets.only(bottom: 18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         StatusPill(label: 'Operation unavailable', tone: MonitorTone.warning, icon: Icons.lock_outline),
         SizedBox(height: 6),
         Text('This device’s capability or the agent’s current mode does not permit submission. You can still review the parameters.'),
       ])),
-      for (final field in fields) Padding(padding: const EdgeInsets.only(bottom: 20), child: fieldWidget(field)),
+      for (final field in fields) Padding(padding: const EdgeInsets.only(bottom: 12), child: fieldWidget(field)),
       if (danger) ...[
-        Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Theme.of(context).colorScheme.error.withValues(alpha: .07), borderRadius: BorderRadius.circular(8)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Theme.of(context).colorScheme.error.withValues(alpha: .07), border: Border.all(color: Theme.of(context).colorScheme.error), borderRadius: BorderRadius.circular(4)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Destructive operation', style: TextStyle(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           const Text('Review this target and every parameter. Committed effects may be irreversible; cancellation is not rollback.'),
@@ -583,7 +585,10 @@ class _OperationDialogState extends State<OperationDialog> {
       ],
       if (error != null) Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: SelectableText(error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
       if (busy) ...[const SizedBox(height: 14), const LinearProgressIndicator(), const SizedBox(height: 8), const Text('Submitting to the agent. Keep this dialog open.')],
-    ])))), actions: [TextButton(onPressed: busy ? null : () => Navigator.pop(context), child: const Text('Cancel')), FilledButton.icon(onPressed: busy || unavailable ? null : submit, style: danger ? FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error, foregroundColor: Theme.of(context).colorScheme.onError) : null, icon: Icon(danger ? Icons.warning_amber_outlined : Icons.play_arrow_outlined), label: Text(danger ? 'Review & authorize' : 'Run on agent'))],
+    ])))), actions: [monitorDialogActions(context, [
+      TextButton(onPressed: busy ? null : () => Navigator.pop(context), child: const Text('Cancel')),
+      FilledButton.icon(onPressed: busy || unavailable ? null : submit, style: danger ? FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error, foregroundColor: Theme.of(context).colorScheme.onError) : null, icon: Icon(danger ? Icons.warning_amber_outlined : Icons.play_arrow_outlined), label: Text(danger ? 'Review & authorize' : 'Run on agent')),
+    ])],
   ));
   Widget fieldWidget(Map<String, dynamic> field) {
     final key = field['name'].toString(), type = field['type']; final title = '${field['label'] ?? label(key)}${field['required'] == true ? ' *' : ''}';
@@ -637,7 +642,7 @@ class _JobDialogState extends State<JobDialog> {
   Widget build(BuildContext context) {
     final result = object(job['result']);
     final artifacts = [...records(result['artifacts']), ...records(object(result['data'])['artifacts'])];
-    return AlertDialog(title: const Text('Job details'), content: SizedBox(width: 720, child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+    return AlertDialog(actionsPadding: const EdgeInsets.all(12), title: const Text('Job details'), content: SizedBox(width: 720, child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
       Text(widget.machine.profile.name, style: Theme.of(context).textTheme.titleLarge),
       const SizedBox(height: 4),
       Text('${job['operation'] ?? 'Operation not reported'}', style: Theme.of(context).textTheme.titleMedium),
@@ -668,11 +673,11 @@ class _JobDialogState extends State<JobDialog> {
       const SizedBox(height: 14),
       ExpansionTile(tilePadding: EdgeInsets.zero, title: const Text('Execution record'), subtitle: const Text('Parameters, results and agent-reported errors'), children: [DataTree(value: job)]),
       if (error != null) Padding(padding: const EdgeInsets.only(top: 14), child: SelectableText(error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-    ]))), actions: [
+    ]))), actions: [monitorDialogActions(context, [
       if (active) TextButton.icon(onPressed: job['state'] == 'cancelling' ? null : cancel, icon: const Icon(Icons.stop_circle_outlined), label: const Text('Request cancellation')),
       TextButton.icon(onPressed: refresh, icon: const Icon(Icons.refresh_outlined), label: const Text('Refresh')),
       FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
-    ]);
+    ])]);
   }
 }
 
@@ -689,12 +694,13 @@ class _ActivityViewState extends State<ActivityView> {
   String tab = 'Jobs';
   List<Map<String, dynamic>> audit = [];
   bool loading = false;
+  String? auditError;
   @override
-  void didUpdateWidget(ActivityView old) { super.didUpdateWidget(old); if (old.machine != widget.machine) { audit = []; if (tab == 'Audit') unawaited(loadAudit()); } }
+  void didUpdateWidget(ActivityView old) { super.didUpdateWidget(old); if (old.machine != widget.machine) { audit = []; auditError = null; if (tab == 'Audit') unawaited(loadAudit()); } }
   Future<void> loadAudit() async {
     setState(() => loading = true);
-    try { final result = await widget.machine.api.call('GET','/audit'); if (mounted) setState(() => audit = records(result['items'])); }
-    catch (e) { widget.onError(e.toString()); } finally { if (mounted) setState(() => loading = false); }
+    try { final result = await widget.machine.api.call('GET','/audit'); if (mounted) setState(() { audit = records(result['items']); auditError = null; }); }
+    catch (e) { if (mounted) setState(() => auditError = e.toString()); widget.onError(e.toString()); } finally { if (mounted) setState(() => loading = false); }
   }
   @override
   Widget build(BuildContext context) {
@@ -706,13 +712,14 @@ class _ActivityViewState extends State<ActivityView> {
         onPressed: loading ? null : () => tab == 'Audit' ? loadAudit() : widget.onRefresh(),
         icon: const Icon(Icons.refresh_outlined), label: const Text('Refresh'),
       )),
-      const SizedBox(height: 20),
+      const SizedBox(height: 12),
       Wrap(spacing: 8, runSpacing: 8, children: [
         for (final name in ['Jobs', 'Events', 'Audit']) ChoiceChip(label: Text(name), selected: tab == name, onSelected: (_) { setState(() => tab = name); if (name == 'Audit') unawaited(loadAudit()); }),
       ]),
-      const SizedBox(height: 16),
+      const SizedBox(height: 12),
       if (loading) const Padding(padding: EdgeInsets.only(bottom: 12), child: LinearProgressIndicator()),
       if (tab != 'Audit' && widget.machine.errors.containsKey(tab.toLowerCase())) const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('Refresh unavailable. Showing retained records, which may be stale.')),
+      if (tab == 'Audit' && auditError != null) const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('Audit refresh unavailable. Showing retained agent records, which may be stale.')),
       MonitorPanel(padding: EdgeInsets.zero, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (data.isEmpty) Padding(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Icon(tab == 'Jobs' ? Icons.work_outline : Icons.receipt_long_outlined, color: Theme.of(context).colorScheme.onSurfaceVariant),
@@ -752,7 +759,7 @@ class _ActivityViewState extends State<ActivityView> {
       if (tab == 'Jobs' && entry['message'] != null) ...[const SizedBox(height: 8), Text(entry['message'].toString())],
     ]);
     if (tab == 'Jobs') {
-      return InkWell(onTap: () => widget.onJob(entry), child: Padding(padding: const EdgeInsets.all(18), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      return InkWell(onTap: () => widget.onJob(entry), child: Padding(padding: const EdgeInsets.all(12), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(padding: const EdgeInsets.only(top: 3), child: Icon(['failed', 'interrupted'].contains(entry['state']) ? Icons.error_outline : entry['state'] == 'succeeded' ? Icons.task_alt_outlined : Icons.schedule_outlined, size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant)),
         const SizedBox(width: 14),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -763,11 +770,11 @@ class _ActivityViewState extends State<ActivityView> {
       ])));
     }
     return ExpansionTile(
-      tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+      tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       leading: Icon(tab == 'Events' ? Icons.notifications_outlined : Icons.policy_outlined, size: 20),
       title: Text(entry['message']?.toString() ?? entry['operation']?.toString() ?? entry['kind']?.toString() ?? 'Record', style: Theme.of(context).textTheme.titleMedium),
       subtitle: Padding(padding: const EdgeInsets.only(top: 8), child: summary),
-      childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       children: [
         DataTree(value: entry),
         if (tab == 'Events') Align(alignment: Alignment.centerRight, child: TextButton.icon(
@@ -789,14 +796,15 @@ class DevicesView extends StatefulWidget {
 class _DevicesViewState extends State<DevicesView> {
   List<Map<String, dynamic>> devices = [];
   bool loading = false;
+  String? loadError;
   @override
   void initState() { super.initState(); unawaited(load()); }
   @override
-  void didUpdateWidget(DevicesView old) { super.didUpdateWidget(old); if (old.machine != widget.machine) { devices = []; unawaited(load()); } }
+  void didUpdateWidget(DevicesView old) { super.didUpdateWidget(old); if (old.machine != widget.machine) { devices = []; loadError = null; unawaited(load()); } }
   Future<void> load() async {
     setState(() => loading = true);
-    try { final response = await widget.machine.api.call('GET','/devices'); if (mounted) setState(() => devices = records(response['items'])); }
-    catch (e) { widget.onError(e.toString()); } finally { if (mounted) setState(() => loading = false); }
+    try { final response = await widget.machine.api.call('GET','/devices'); if (mounted) setState(() { devices = records(response['items']); loadError = null; }); }
+    catch (e) { if (mounted) setState(() => loadError = e.toString()); widget.onError(e.toString()); } finally { if (mounted) setState(() => loading = false); }
   }
   Future<void> revoke(Map<String, dynamic> device) async {
     final self = device['id'] == widget.machine.profile.deviceId;
@@ -807,24 +815,25 @@ class _DevicesViewState extends State<DevicesView> {
   @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
     SectionHeader(title: 'Devices & access', subtitle: widget.machine.profile.name, action: OutlinedButton.icon(onPressed: loading ? null : load, icon: const Icon(Icons.refresh_outlined), label: const Text('Refresh'))),
-    const SizedBox(height: 16),
+    const SizedBox(height: 12),
     const Text('Roles are approved locally during pairing. This client cannot elevate its own role. Revocation takes effect immediately on the agent.'),
-    const SizedBox(height: 20),
+    const SizedBox(height: 12),
     if (loading) const Padding(padding: EdgeInsets.only(bottom: 14), child: LinearProgressIndicator()),
+    if (loadError != null) const Padding(padding: EdgeInsets.only(bottom: 12), child: Text('Access refresh unavailable. Retained device records may be stale; revocation is authorized by the agent.')),
     MonitorPanel(padding: EdgeInsets.zero, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (!loading && devices.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('No enrolled devices returned or access is unavailable. Refresh to request the agent’s current device list.')),
       for (var index = 0; index < devices.length; index++) ...[
         if (index > 0) const Divider(height: 1),
         ExpansionTile(
           leading: const Icon(Icons.devices_outlined, size: 20),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           title: Text(devices[index]['name']?.toString() ?? 'Name not reported', style: Theme.of(context).textTheme.titleMedium),
           subtitle: Padding(padding: const EdgeInsets.only(top: 8), child: Wrap(spacing: 8, runSpacing: 6, children: [
             StatusPill(label: label(devices[index]['role']?.toString() ?? 'Role not reported')),
             StatusPill(label: devices[index]['revoked'] == true ? 'Revoked' : devices[index]['revoked'] == false ? 'Enrolled' : 'Status not reported', tone: devices[index]['revoked'] == true ? MonitorTone.danger : MonitorTone.neutral),
             if (devices[index]['id'] == widget.machine.profile.deviceId) const StatusPill(label: 'This device', icon: Icons.computer_outlined),
           ])),
-          childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           children: [
             DataTree(value: devices[index]),
             Align(alignment: Alignment.centerRight, child: TextButton.icon(
@@ -887,12 +896,12 @@ class _SettingsViewState extends State<SettingsView> {
     final domains = (widget.machine.health['config_domains'] as List? ?? ['monitor','backup']).map((v) => v.toString()).toSet().toList();
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       SectionHeader(title: 'Settings', subtitle: '${widget.machine.profile.name} · client preferences and agent configuration'),
-      const SizedBox(height: 20),
+      const SizedBox(height: 12),
       MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const SectionHeader(title: 'This client', subtitle: 'Local preferences do not change agent execution'),
         const SizedBox(height: 12),
         SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Local alert notifications'), subtitle: const Text('Opt-in while this client is running. Agent events remain durable when the app is closed. Mobile background push requires separately configured APNs/FCM credentials and a trusted server sender; it is not enabled by this switch.'), value: widget.fleet.notificationsEnabled, onChanged: (value) async { try { await widget.fleet.enableNotifications(value); } catch (e) { widget.onError(e.toString()); } }),
-        const Divider(height: 28),
+        const Divider(height: 24),
         Text('Device certificate', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 6),
         const Text('Renewal replaces this device’s key and revokes its previous certificate. Keep the client open until secure storage is updated.'),
@@ -904,14 +913,14 @@ class _SettingsViewState extends State<SettingsView> {
         finally { if (mounted) setState(() => loading = false); }
         }, icon: const Icon(Icons.autorenew_outlined), label: const Text('Renew this device certificate'))),
       ])),
-      const SizedBox(height: 20),
+      const SizedBox(height: 8),
       MonitorPanel(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const SectionHeader(title: 'Agent configuration', subtitle: 'Revision-controlled changes, validated by the agent'),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         const Text('Secrets remain masked. Leave a protected secret unchanged to preserve it, or explicitly replace or clear it. Edit advanced domain keys with the typed controls below.'),
         if (widget.machine.health['read_only'] == true) const Padding(padding: EdgeInsets.only(top: 12), child: StatusPill(label: 'Read-only safety mode', tone: MonitorTone.warning, icon: Icons.lock_outline)),
-        const SizedBox(height: 20),
-        LayoutBuilder(builder: (context, bounds) => Wrap(spacing: 14, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        const SizedBox(height: 12),
+        LayoutBuilder(builder: (context, bounds) => Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           SizedBox(width: math.min(260.0, bounds.maxWidth), child: DropdownButtonFormField<String>(
             initialValue: domain, isExpanded: true,
             decoration: const InputDecoration(labelText: 'Configuration domain'),
@@ -924,9 +933,9 @@ class _SettingsViewState extends State<SettingsView> {
         if (loading) const Padding(padding: EdgeInsets.symmetric(vertical: 18), child: LinearProgressIndicator()),
         if (error != null) Padding(padding: const EdgeInsets.symmetric(vertical: 14), child: SelectableText(error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
         if (configuration != null) ...[
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           Form(key: configurationForm, child: IgnorePointer(ignoring: loading, child: ConfigEditor(key: ValueKey('${widget.machine.profile.id}-$domain-$generation'), value: edited, name: domain, onChanged: (value) => edited = value))),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           Align(alignment: Alignment.centerRight, child: FilledButton.icon(onPressed: loading ? null : save, icon: const Icon(Icons.save_outlined), label: const Text('Review & apply revision'))),
         ],
       ])),
@@ -958,12 +967,12 @@ class _ConfigEditorState extends State<ConfigEditor> {
       if (type == 'text' || type == 'number') TextField(controller: text, keyboardType: type == 'number' ? const TextInputType.numberWithOptions(decimal: true, signed: true) : TextInputType.text, decoration: const InputDecoration(labelText: 'Value')),
       if (type == 'boolean') const Text('New boolean starts disabled; toggle it after adding.'),
       if (validation != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(validation!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
-    ]))), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () {
+    ]))), actions: [monitorDialogActions(context, [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () {
       if (map && (key.text.trim().isEmpty || (value as Map).containsKey(key.text.trim()))) { set(() => validation = 'Enter a new unique setting name.'); return; }
       if (type == 'number' && (num.tryParse(text.text) == null || !num.parse(text.text).isFinite)) { set(() => validation = 'Enter a finite number.'); return; }
       final dynamic item = switch(type) {'number' => num.parse(text.text), 'boolean' => false, 'object' => <String,dynamic>{}, 'list' => <dynamic>[], _ => text.text};
       Navigator.pop(context, {'key': key.text.trim(), 'value': item});
-    }, child: const Text('Add'))],)));
+    }, child: const Text('Add'))])],)));
     key.dispose(); text.dispose();
     if (result != null) setState(() { if (map) { value[result['key']] = result['value']; } else { value.add(result['value']); } widget.onChanged(value); });
   }
@@ -978,7 +987,7 @@ class _ConfigEditorState extends State<ConfigEditor> {
         subtitle: Text('${map.length} typed settings', style: Theme.of(context).textTheme.bodySmall),
         childrenPadding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
         children: [
-          for (final key in map.keys.toList()) Padding(padding: const EdgeInsets.only(bottom: 20), child: ConfigEditor(key: ValueKey(key), value: map[key], name: key.toString(), onChanged: (next) { map[key] = next; widget.onChanged(map); })),
+          for (final key in map.keys.toList()) Padding(padding: const EdgeInsets.only(bottom: 12), child: ConfigEditor(key: ValueKey(key), value: map[key], name: key.toString(), onChanged: (next) { map[key] = next; widget.onChanged(map); })),
           Align(alignment: Alignment.centerLeft, child: TextButton.icon(onPressed: () => add(map: true), icon: const Icon(Icons.add_outlined), label: const Text('Add named setting'))),
         ],
       ));
@@ -1005,8 +1014,8 @@ class _ConfigEditorState extends State<ConfigEditor> {
       ]);
       final action = TextButton(onPressed: () => setState(() { replacingSecret = true; controller.clear(); update(''); }), child: const Text('Replace / clear'));
       return Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(8)),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: Theme.of(context).colorScheme.surfaceContainerLow, border: Border.all(color: Theme.of(context).colorScheme.outlineVariant), borderRadius: BorderRadius.circular(4)),
         child: LayoutBuilder(builder: (context, bounds) => bounds.maxWidth < 420
           ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [information, const SizedBox(height: 8), action])
           : Row(children: [Expanded(child: information), const SizedBox(width: 14), action])),

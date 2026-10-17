@@ -49,7 +49,9 @@ class AgentRuntime:
 
         self.root = Path(root).resolve()
         self.data_dir = Path(data_dir).resolve()
-        self.read_only = bool(read_only)
+        # A direct installation stays monitoring-only, including signed builds
+        # and after bootstrap publication has been retired.
+        self.read_only = bool(read_only) or (self.data_dir / "direct-bootstrap.json").exists()
         self.store = Store(self.data_dir)
         self.ca = CertificateAuthority(self.data_dir)
         self.security = Security(self.store, self.ca)
@@ -445,6 +447,12 @@ class AgentRuntime:
             return health
         if method == "pairing.enroll":
             return self.security.enroll(str(params.get("code", "")), str(params.get("name", "")), str(params.get("csr", "")))
+        if method in {"direct.bootstrap", "direct.complete"}:
+            from .direct import direct_bootstrap
+            if set(params) != {"nonce"}:
+                raise OperationError("invalid_arguments", "Direct requests require only a nonce.")
+            return direct_bootstrap(self.security, self.data_dir, params["nonce"],
+                                    actor=actor, complete=method == "direct.complete")
         # pairing.begin and transport.tls are intentionally not public RPCs. Only
         # authenticated local-administrator CLI/IPC code can invoke those methods.
         current = self._actor(actor)

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'direct_installation.dart';
 import 'relay.dart';
 
 class GuestInstallerRelease {
@@ -10,9 +11,10 @@ class GuestInstallerRelease {
   final String sha256;
   final bool unsignedPreview;
   final String? publisherThumbprint;
+  final int setupProtocol;
 
   GuestInstallerRelease({required this.url, required this.sha256,
-    required this.unsignedPreview, this.publisherThumbprint}) {
+    required this.unsignedPreview, this.publisherThumbprint, this.setupProtocol = 1}) {
     final uri = Uri.tryParse(url);
     // SET is parsed by CMD before PowerShell starts. Never permit expansion,
     // quoting, redirection, whitespace or command separators in public values.
@@ -21,7 +23,7 @@ class GuestInstallerRelease {
         !RegExp(r'^https://[A-Za-z0-9._~:/-]+$').hasMatch(url) ||
         !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(sha256) ||
         (publisherThumbprint != null && !RegExp(r'^[0-9a-fA-F]{40}$').hasMatch(publisherThumbprint!)) ||
-        (!unsignedPreview && publisherThumbprint == null)) {
+        (!unsignedPreview && publisherThumbprint == null) || setupProtocol < 1) {
       throw const FormatException('The trusted guest release descriptor is invalid.');
     }
   }
@@ -36,7 +38,14 @@ Future<String> buildGuestInstallCommand({required String setupUri,
   if (setupUri != setupUri.trim()) {
     throw const FormatException('The private setup capability is invalid.');
   }
-  RelaySetupCode.parse(setupUri);
+  if (setupUri.startsWith('rdpmonitor://direct')) {
+    DirectSetupCode.parse(setupUri);
+    if (release.setupProtocol < 2) {
+      throw const FormatException('This guest release does not support secure direct installation. A verified setup-protocol 2 release is required.');
+    }
+  } else {
+    RelaySetupCode.parse(setupUri);
+  }
   if (release.unsignedPreview && !acceptUnsignedPreview) {
     throw const FormatException('Explicit unsigned monitoring-only acceptance is required.');
   }
@@ -71,7 +80,7 @@ Future<String> buildGuestInstallCommand({required String setupUri,
     '"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -EncodedCommand ${base64.encode(utf16)}'
     ' && ($cleanup) || ($cleanup & "%SystemRoot%\\System32\\cmd.exe" /d /c exit 1)';
   if (command.length > 8191) {
-    throw const FormatException('The private CMD command exceeds the Windows 8191-character limit. Use a shorter relay origin or release URL.');
+    throw const FormatException('The private CMD command exceeds the Windows 8191-character limit. Use a shorter endpoint or release URL.');
   }
   return command;
 }

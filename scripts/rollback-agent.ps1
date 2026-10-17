@@ -29,7 +29,7 @@ try {
     Save-Deployment $previous
     $agent = Join-Path $previous.release 'agent\RDPMonitorAgent.exe'
     Invoke-Checked $agent @('service-register')
-    if ($previous.scope -eq 'Private') { Set-NetFirewallRule -Name 'RDPMonitor-Gateway-Private' -Program $agent }
+    Set-OwnedGatewayProgram $previous $agent
     Start-AgentServices
     Invoke-Checked $agent @('status','--data-dir',$DataRoot,'--require-gateway','--host',$previous.host,'--port',([string]$previous.port))
     $state.state = 'manually-rolled-back'

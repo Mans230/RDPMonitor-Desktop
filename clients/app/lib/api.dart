@@ -108,6 +108,14 @@ class MachineProfile {
     if (costMinor != null) 'costMinor': costMinor,
     'currency': currency, 'billingPeriod': billingPeriod};
 
+  // Display labels and contract reminders are not part of device authority.
+  bool sameCredentials(MachineProfile other) =>
+    id == other.id && endpoint == other.endpoint && deviceId == other.deviceId &&
+    certificate == other.certificate && privateKey == other.privateKey &&
+    ca == other.ca && fingerprint == other.fingerprint && role == other.role &&
+    relay?.origin == other.relay?.origin && relay?.routeId == other.relay?.routeId &&
+    relay?.token == other.relay?.token;
+
   MachineProfile withCredentials({required String certificate, required String privateKey,
     required String ca, required String deviceId, required String role}) =>
     MachineProfile(id: id, name: name, group: group, endpoint: endpoint,

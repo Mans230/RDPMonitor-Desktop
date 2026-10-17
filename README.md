@@ -6,11 +6,13 @@ The client uses Flutter widgets, not a WebView. Telegram and the browser panel h
 
 **Windows preview · MIT open source · unsigned monitoring-only installer**
 
-[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.0-preview.4) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
+[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.1-preview.5) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
 
-![Native Backups workspace with responsive command cards connected to a local read-only agent fixture](docs/images/desktop-overview.png)
+![Native monochrome Backups workspace connected to a temporary local read-only verification agent](docs/images/desktop-overview.png)
 
-The desktop redesign uses bundled Geist typography, slate/teal light and dark themes, grouped machine tools, explicit connection/access context, searchable fleet rows and loaded-history chart controls. It remains a native Flutter app with real agent data, not a browser wrapper or a dashboard mockup.
+The native Flutter console follows the supplied black-and-white design: compact bordered panels, system typography, grouped command rows, semantic status colors and responsive navigation. Light and dark themes retain the same hierarchy. Metrics and capabilities come from the real agent, not prototype sample data or a browser wrapper.
+
+Preview 5 includes the native console redesign and direct, desktop-key-bound VM installation.
 
 ## What it manages
 
@@ -29,23 +31,23 @@ The normal-user desktop client connects over TLS with an individually enrolled c
 
 A local suite installation includes client and agent. The quick VM command installs a separate **agent-only** package: no desktop app on the guest. A guest agent manages Windows inside its VM; provider/hypervisor power control and VM provisioning are not included.
 
-For machines behind NAT or on different networks, the agent and desktop both connect outward to a self-hosted HTTPS relay. The relay forwards opaque desktop-to-agent TLS bytes; the existing agent certificates, roles, confirmations and revocation remain authoritative. No VM inbound management rule or VPN is required. See the [implementation and trust-boundary plan](docs/RELAY-INSTALLATION-PLAN.md).
+Direct installation needs no relay: the desktop connects to the VM's reachable HTTPS endpoint. For NAT-restricted machines without direct reachability, an optional self-hosted HTTPS relay forwards opaque desktop-to-agent TLS bytes; certificates, roles and revocation remain authoritative. Relay deployment is an advanced alternative, not a normal installation prerequisite. See the [direct installation plan](docs/DIRECT-INSTALLATION-PLAN.md) and [optional relay plan](docs/RELAY-INSTALLATION-PLAN.md).
 
 ## Install a VM with one CMD command
 
-An operator must first deploy the supplied relay with a domain and valid HTTPS. **This repository does not provide a publicly hosted relay.**
+1. On your PC, extract the Windows preview ZIP and run `client\rdpmonitor.exe`. Keep its adjacent runtime files.
+2. Choose **Add machine**. Enter the VM's name, optional group and reachable IP/hostname; HTTPS defaults to TCP **8443**. No relay account or configuration is required.
+3. Choose **Prepare command**, accept the explicit unsigned monitoring-only preview notice, then **Copy CMD command**.
+4. Inside the Windows VM, open **Command Prompt as Administrator** (CMD, not PowerShell), paste that one line and press Enter. No guest desktop app, installer wizard, pairing-code entry or return code is needed.
+5. Keep Add machine open. The desktop verifies the prepared VM transport key, retrieves the public certificate already approved for its own private key, verifies ordinary mTLS and saves the machine automatically. Close/reopen Add machine to resume the same protected pending identity.
 
-1. On your operator PC, extract the Windows preview ZIP and run `client\rdpmonitor.exe`. Keep its adjacent runtime files.
-2. Open **Relay settings** from the connection menu. Save your relay's HTTPS origin and private administration key once; they go into OS-protected storage.
-3. Choose **Add machine**, enter its name and optional group, and create the installation command. Accept the explicit unsigned monitoring-only preview notice, then choose **Copy CMD command**.
-4. Inside the Windows VM, open **Command Prompt as Administrator** (CMD, not PowerShell), paste that one line and press Enter. No VM installer wizard, setup-code entry or second code is needed.
-5. Keep Add machine open. The desktop verifies the encrypted agent identity and enrolls automatically. No VM address or manual fingerprint entry is required. Close and reopen Add machine to resume its protected pending installation.
+The installer detects the unique active RDP TCP peer and adds a Windows inbound rule limited to that source and the VM's management port. With an RDP gateway, provider console, multiple peers or a different watcher PC, enter the watcher's literal source IP under **Advanced: desktop source IP** before preparing the command. Ambiguous detection fails closed; Windows firewall profiles must be enabled with inbound blocking. **Your provider firewall/security group/router must also permit that source and port.** This installer cannot configure your hosting account, make an unreachable VM reachable, or follow a changing desktop public IP automatically.
 
-The command downloads the complete background guest runtime, verifies the desktop-pinned SHA256, and silently installs boot-time worker/gateway services with a loopback-only listener and outward relay connection. It executes only the desktop's bundled public bootstrap code, not a downloaded script. No separate Python or Flutter installation is needed, and the operator desktop app is not installed on the guest. Normal CMD provisioning is always **monitoring-only/viewer**, including signed builds, and refuses an already installed machine rather than replacing its identity.
+The command downloads the complete **guest-only** runtime over HTTPS, verifies its desktop-pinned SHA256 and silently installs boot-time worker/gateway services. It executes bundled public bootstrap code, not a downloaded script; no separate Python or Flutter installation is needed. CMD provisioning is always **monitoring-only/viewer**, including signed builds, and refuses an existing installation rather than replacing its identity. The normal direct command lasts 30 minutes.
 
-**The copied command is private.** Its base64url environment value contains independent registration and pairing capabilities; encoding is not encryption. Only the registration token reaches the relay. The pairing key authenticates the VM's encrypted identity envelope locally. The secret is passed through process environment into an administrator/SYSTEM-protected exchange, not PowerShell/native installer arguments or download URLs. Paste into an existing CMD window—never pass the private line as `cmd /c` arguments or publish it. Clipboard and CMD history can retain it.
+**The copied command is private.** It includes the initial VM transport private key, public desktop CSR and bootstrap nonce, but **never the desktop client private key or VM CA private key**. Encoding is not encryption. Native setup consumes private environment data through an administrator/SYSTEM-protected exchange; secrets are not installer/PowerShell arguments or download URLs. Paste into an existing CMD window—never put the line in `cmd /c` arguments or publish it. Clipboard and CMD history can retain it. Knowing the IP, nonce or public client certificate does not authorize another desktop.
 
-For an already installed agent, use the matching native installer's advanced pairing/repair flow; do not rerun the fresh-machine command or reuse a consumed installation invitation. Desktop exit does not stop installed services.
+For an already installed agent or an expired installed setup, use the matching native installer's **Pair installed agent** local-recovery flow and the desktop's **Pair installed agent (direct HTTPS)** action. Do not rerun a fresh-machine command. A saved identity with pending acknowledgement can resume even after the installation window expires; retries neither issue another certificate nor duplicate/drop the saved machine. Desktop exit does not stop installed services.
 
 The installer is a preview, not proof of an accepted deployment. **Installed SCM identities, reboot/logoff and clean-VM repair/uninstall remain unvalidated on a disposable VM.** Use a disposable Windows VM first. This is not a signed production release; do not bypass the separate production signature checks.
 
@@ -53,12 +55,13 @@ The installer is a preview, not proof of an accepted deployment. **Installed SCM
 
 - Machines are grouped in a searchable table with live/retained disk used, total and free space, contract expiry, renewal date and cost estimate. Edit a profile or choose **Edit renewal dates**; dates are local calendar days, costs use exact two-decimal amounts and an editable currency/billing period.
 - Contract metadata stays in the client vault and survives device-certificate renewal. It does not charge a payment method, renew a provider contract or extend certificate access.
-- **Backups**, **Recovery**, **Processes** and **Services** have separate sections. Related command groups show one, two or three natural-height cards according to the actual available content width.
-- Use **Hide sidebar / Show sidebar** on wide windows; narrower windows use a navigation drawer. Tables scroll horizontally instead of hiding contract columns or overflowing.
-- Advanced **Connect with code** remains available for already-installed agents and interrupted setup recovery. Issued identities are checkpointed before the final authenticated probe, so verification/save retries do not repeat enrollment.
+- **Backups & recovery** and **Processes & services** combine related navigation entries with separate tabs. Searchable command groups use dense rows with capability, confirmation and read-only indicators.
+- The labelled sidebar becomes an icon rail in narrower windows and a navigation drawer below 560 logical pixels. Hide/show remains available. Rich fleet tables scroll internally or become labelled stacked records when space is limited; phone dialogs become full-height sheets with full-width actions.
+- Advanced **Pair installed agent (direct HTTPS)** and optional relay actions remain available from the connection menu. Issued identities are checkpointed before the final authenticated probe, so verification/save retries do not repeat enrollment.
+- **Pause telemetry** pauses automatic desktop refresh only. Agent monitoring, jobs and already active requests continue; explicit refresh and resume remain available.
 
 
-For the relay's one-time deployment, native installer builds and the advanced direct connection method, see [deployment instructions](docs/DESKTOP-DEPLOYMENT.md).
+For direct networking, native installer builds, local recovery and optional relay deployment, see [deployment instructions](docs/DESKTOP-DEPLOYMENT.md).
 
 ## Run from source
 
@@ -89,7 +92,7 @@ flutter run -d windows
 # Or: flutter build windows --release
 ```
 
-For this direct source-evaluation flow, choose **Advanced: direct HTTPS** from the connection menu, then enter `https://127.0.0.1:9443`, the locally verified fingerprint/code, a display name and device name. The client generates its key locally and stores credentials in OS-protected storage. Ordinary connections verify the enrolled CA, hostname and client certificate; no certificate-verification bypass is offered.
+For this direct source-evaluation flow, choose **Pair installed agent (direct HTTPS)** from the connection menu, then enter `https://127.0.0.1:9443`, the locally verified fingerprint/code, a display name and device name. The client generates its key locally and stores credentials in OS-protected storage. Ordinary connections verify the enrolled CA, hostname and client certificate; no certificate-verification bypass is offered.
 
 Use a short checkout path such as `C:\src\rdpmonitor` for Windows C++ builds. Deep temporary paths can exceed MSBuild's path limit. A substituted drive can shorten Windows builds, but Android/Kotlin builds should keep the project and Pub cache on the same drive to avoid cross-root incremental-cache failures.
 
