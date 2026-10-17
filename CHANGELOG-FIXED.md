@@ -131,3 +131,11 @@ that architectural limitation is documented rather than hidden.
 - Advanced the numeric package version to 1.0.2/build 7 and pinned matching new guest bytes in the desktop. Earlier immutable release assets are not replaced. Retained earlier-preview installations are not fresh-install targets or implicit same-release upgrades.
 - Full installed service startup/enrollment on a clean VM, reboot/logoff, repair/uninstall, provider routing and production signing remain separate acceptance gates.
 
+## Product website — Paper-inspired editorial direction
+
+- Added a responsive, dependency-free product website with the selected editorial hero, a real desktop screenshot, feature groups, direct-installation guidance, source links and an explicit Windows ZIP download.
+- Pinned the public 1.0.2 Preview 1 asset and its verified SHA256. Release and checksum downloads remain ordinary links without JavaScript; the small copy interaction reports clipboard failure and permits manual copying.
+- Preserved unsigned/read-only, fresh-VM, existing-identity, provider-firewall and unvalidated installed-lifecycle boundaries. The website neither connects to machines nor changes the native client or guest.
+- Added a dedicated static GitHub Pages branch with self-hosted licensed typography and a lossless screenshot. Publication does not require custom-workflow token permissions; no analytics, external scripts, build framework or package installation is required.
+- Exercised actual Chromium layouts at 320, 390, 768, 1024 and 1440px, FAQ disclosure, checksum copying, reduced-motion and JavaScript-disabled downloads. All twelve unique external source/documentation/release links returned HTTP 200; the published ZIP checksum matches the page.
+

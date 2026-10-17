@@ -6,7 +6,7 @@ The client uses Flutter widgets, not a WebView. Telegram and the browser panel h
 
 **Windows preview · MIT open source · unsigned monitoring-only installer**
 
-[Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.2-preview.1) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
+[Product website](https://mans230.github.io/RDPMonitor-Desktop/) · [Download the Windows preview](https://github.com/Mans230/RDPMonitor-Desktop/releases/tag/v1.0.2-preview.1) · [Install a VM with one CMD command](docs/DESKTOP-DEPLOYMENT.md#install-a-vm-with-one-cmd-command) · [Security](SECURITY.md)
 
 ![Native monochrome Backups workspace connected to a temporary local read-only verification agent](docs/images/desktop-overview.png)
 
@@ -62,6 +62,29 @@ The installer is a preview, not proof of an accepted deployment. Windows SCM cre
 
 
 For direct networking, native installer builds, local recovery and optional relay deployment, see [deployment instructions](docs/DESKTOP-DEPLOYMENT.md).
+
+## Product website
+
+The public introduction and download page is [mans230.github.io/RDPMonitor-Desktop](https://mans230.github.io/RDPMonitor-Desktop/). Its dependency-free HTML, CSS and small checksum-copy script live in `website/`; this is a product website, not a browser administration panel. The desktop app and guest are unchanged.
+
+The site uses the real desktop verification screenshot and the bundled Geist font with its OFL notice. It contains no analytics, remote scripts or live machine data. Product details distinguish full source capabilities from the unsigned monitoring-only preview and retain the fresh-VM/provider-network acceptance cautions.
+
+Preview locally from the repository root:
+
+```console
+python -m http.server 8176 --bind 127.0.0.1 --directory website
+```
+
+Open `http://127.0.0.1:8176/`. After committing website changes, publish only the static site to its dedicated branch:
+
+```console
+git subtree push --prefix website origin gh-pages
+```
+
+GitHub Pages deploys from **`gh-pages` / root**. `website/.nojekyll` keeps publishing static; no custom Actions workflow or extra OAuth `workflow` permission is needed. The application source remains on `main`, and only the contents of `website/` are served.
+
+Release download metadata is deliberately pinned in `website/index.html`. When publishing a new preview, update the asset/release/checksum URLs, displayed version/size and SHA256 together after verifying the public artifact. Do not replace them with `/releases/latest`: GitHub's latest-release endpoint excludes prereleases.
+
 
 ## Run from source
 
