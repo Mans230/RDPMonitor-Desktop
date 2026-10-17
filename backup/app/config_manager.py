@@ -56,16 +56,22 @@ def config_revision(cfg):
 
 
 def harden_path(path, directory=False):
-    """Restrict a file or folder to Administrators and SYSTEM (best effort)."""
+    """Restrict a file or folder to Administrators and SYSTEM (best effort).
+
+    Returns True when the ACL was applied (or there is nothing to restrict on a
+    non-Windows host or a missing path), and False when icacls failed, so callers
+    can surface a protection failure instead of assuming success.
+    """
     if os.name != "nt" or not os.path.exists(path):
-        return
+        return True
     perms = "(OI)(CI)F" if directory else "F"
     try:
-        subprocess.run(["icacls", path, "/inheritance:r",
-                        "/grant:r", f"*S-1-5-32-544:{perms}", f"*S-1-5-18:{perms}"],
-                       capture_output=True, timeout=15, creationflags=_NO_WINDOW)
+        result = subprocess.run(["icacls", path, "/inheritance:r",
+                                 "/grant:r", f"*S-1-5-32-544:{perms}", f"*S-1-5-18:{perms}"],
+                                capture_output=True, timeout=15, creationflags=_NO_WINDOW)
+        return result.returncode == 0
     except Exception:
-        pass
+        return False
 
 
 def harden_backup_assets(cfg=None):
@@ -73,17 +79,20 @@ def harden_backup_assets(cfg=None):
 
     The backup secrets use machine-scoped DPAPI, which other local accounts could
     decrypt, so filesystem ACLs are the primary protection.
+    Returns the list of paths whose ACL could not be applied, so a failed
+    hardening step is reported instead of silently ignored.
     """
     root = os.path.dirname(os.path.abspath(CONFIG_FILE))
-    harden_path(CONFIG_FILE)
+    targets = [(CONFIG_FILE, False)]
     if cfg:
         rclone_conf = (cfg.get("cloud", {}) or {}).get("rclone_config") or ""
         if rclone_conf:
-            harden_path(rclone_conf)
+            targets.append((rclone_conf, False))
     for name in ("bot_session_gui.session", "bot_session_pyro.session"):
-        harden_path(os.path.join(root, name))
+        targets.append((os.path.join(root, name), False))
     for name in ("control", "local_backups", "logs"):
-        harden_path(os.path.join(root, name), directory=True)
+        targets.append((os.path.join(root, name), True))
+    return [path for path, is_dir in targets if not harden_path(path, directory=is_dir)]
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
 
@@ -109,7 +118,7 @@ DEFAULT_CONFIG = {
         "pre_command": "",                 # A command that is run before copying (Example: Export a database)
         "post_command": "",                # A command to run after copying (Always, even when you fail)
         "hook_timeout_minutes": 60,
-        "hooks_enabled": True              # Master switch: pre/post commands run with the worker's own identity
+        "hooks_enabled": False             # Master switch: pre/post commands run with the worker's own identity (opt in)
     },
     "schedule": {
         "enabled": False,

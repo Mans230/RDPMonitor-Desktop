@@ -524,18 +524,58 @@ def _find_disk2vhd():
     return None
 
 
+def _microsoft_signed(path):
+    """Return (ok, status, subject) for a Microsoft Authenticode-signed binary.
+
+    A valid signature alone is not enough: the signer subject must name Microsoft,
+    because any signed file would otherwise pass.
+    """
+    sig = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         f"$s = Get-AuthenticodeSignature -LiteralPath '{_ps_quote(path)}'; "
+         f"$sub = if ($s.SignerCertificate) {{ $s.SignerCertificate.Subject }} else {{ '' }}; "
+         f"Write-Output ($s.Status.ToString() + '|' + $sub)"],
+        capture_output=True, timeout=60, creationflags=NO_WINDOW)
+    status, _, subject = _decode_out(sig.stdout).strip().partition("|")
+    microsoft_signer = bool(re.search(
+        r"(?:^|,\s*)CN=Microsoft Corporation(?:,|$)", subject, flags=re.I))
+    return (status.lower() == "valid" and microsoft_signer), status, subject
+
+
 def _download_disk2vhd():
-    """He comes down Disk2vhd From the official Microsoft website (Sysinternals) And extract it into the tool folder"""
+    """Download Disk2vhd, verify its Microsoft Authenticode publisher, then deploy it.
+
+    The archive is extracted into a private staging directory and only the signed
+    binaries are copied into the tool folder, so a tampered or unexpected archive
+    can never write arbitrary files next to the agent.
+    """
+    import shutil
+    import tempfile
     import zipfile
     try:
         r = requests.get(DISK2VHD_URL, timeout=120)
         r.raise_for_status()
-        zpath = os.path.join(BASE_DIR, "Disk2vhd.zip")
-        with open(zpath, "wb") as f:
-            f.write(r.content)
-        with zipfile.ZipFile(zpath) as z:
-            z.extractall(BASE_DIR)
-        os.remove(zpath)
+        with tempfile.TemporaryDirectory(prefix="disk2vhd-") as staging:
+            zpath = os.path.join(staging, "Disk2vhd.zip")
+            with open(zpath, "wb") as f:
+                f.write(r.content)
+            with zipfile.ZipFile(zpath) as z:
+                z.extractall(staging)
+            deployed = []
+            for name in ("disk2vhd64.exe", "disk2vhd.exe"):
+                candidate = os.path.join(staging, name)
+                if not os.path.isfile(candidate):
+                    continue
+                ok, status, subject = _microsoft_signed(candidate)
+                if not ok:
+                    print("[image] disk2vhd rejected: %s status=%s signer=%s"
+                          % (name, status, subject[:60]))
+                    return None
+                shutil.copyfile(candidate, os.path.join(BASE_DIR, name))
+                deployed.append(name)
+            if not deployed:
+                print("[image] disk2vhd archive contained no expected executable")
+                return None
         return _find_disk2vhd()
     except Exception as e:
         print(f"[image] disk2vhd download error: {e}")
@@ -634,21 +674,11 @@ def image_start(remote=None, *, watch=True, volumes="*", target_dir=None, vss=Tr
             "The free-space check passed, but keep Console access: if this disk "
             "fills up, Windows can become unreachable.")
     try:
-        # Check signature Authenticode + Identity of the signer before operation — Code with permissions
-        # Manager from the Internet: A valid signature alone is sufficient (Any signed file is valid
-        # passes) — The signatory must be the same Microsoft/Sysinternals
-        sig = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"$s = Get-AuthenticodeSignature -LiteralPath '{_ps_quote(vhdexe)}'; "
-             f"$sub = if ($s.SignerCertificate) {{ $s.SignerCertificate.Subject }} else {{ '' }}; "
-             f"Write-Output ($s.Status.ToString() + '|' + $sub)"],
-            capture_output=True, timeout=60, creationflags=NO_WINDOW)
-        sig_out = _decode_out(sig.stdout).strip()
-        status, _, subject = sig_out.partition("|")
-        microsoft_signer = bool(re.search(
-            r"(?:^|,\s*)CN=Microsoft Corporation(?:,|$)", subject,
-            flags=re.I))
-        if status.lower() != "valid" or not microsoft_signer:
+        # Verify the Authenticode signature and the signer identity before running:
+        # the executable is fetched from the Internet, so a valid signature alone is
+        # not enough — the signer must be Microsoft/Sysinternals.
+        ok, status, subject = _microsoft_signed(vhdexe)
+        if not ok:
             send_message("[X] Signature Disk2vhd Invalid or not signed "
                          "Microsoft/Sysinternals — I canceled filming and nothing happened\n"
                          f"Status: {esc(status)} | Signer: {esc(subject[:60])}")
@@ -4679,7 +4709,7 @@ def check_services():
         if len(_svcwatch_last) > 200:
             for k in [k for k, t in _svcwatch_last.items() if now_ts - t > 86400]:
                 _svcwatch_last.pop(k, None)
-        if ps_ok(f"Start-Service -Name '{name}' -ErrorAction Stop", timeout=60):
+        if ps_ok(f"Start-Service -Name '{_ps_quote(name)}' -ErrorAction Stop", timeout=60):
             send_message(rtl(f" Service <b>{esc(name)}</b> She was standing — "
                              "It restarted automatically"))
         else:

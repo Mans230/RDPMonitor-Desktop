@@ -16,6 +16,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $knownDeployment = Join-Path $env:ProgramData 'RDPMonitor\deployment.json'
+# The pinned publisher certificate, written at install and retained by -Remove, is the
+# trust anchor. deployment.json is a deployment record, not an authority, so it is only
+# consulted when no pinned certificate exists yet (a first install).
+$pinnedCertificate = Join-Path (Join-Path $env:ProgramFiles 'RDPMonitor') 'publisher.cer'
+if (-not $PublisherThumbprint -and (Test-Path -LiteralPath $pinnedCertificate)) {
+    $PublisherThumbprint = (New-Object Security.Cryptography.X509Certificates.X509Certificate2($pinnedCertificate)).Thumbprint
+}
 if (-not $PublisherThumbprint -and (Test-Path -LiteralPath $knownDeployment)) {
     $PublisherThumbprint = (Get-Content -LiteralPath $knownDeployment -Raw | ConvertFrom-Json).publisher_thumbprint
 }
@@ -28,6 +35,12 @@ Assert-Administrator
 if (Test-Path -LiteralPath $InstallRoot) { Assert-NoReparse $InstallRoot }
 if (Test-Path -LiteralPath $DataRoot) { Assert-NoReparse $DataRoot }
 if ($Remove) {
+    # Refuse removal when the deployment record's publisher is not the pinned trust
+    # anchor, so editing deployment.json alone cannot authorize a different script.
+    if (Test-Path -LiteralPath $knownDeployment) {
+        $recorded = (Get-Content -LiteralPath $knownDeployment -Raw | ConvertFrom-Json).publisher_thumbprint
+        if ($recorded.Replace(' ','').ToUpperInvariant() -ne $PublisherThumbprint.Replace(' ','').ToUpperInvariant()) { throw 'Deployment record publisher does not match the pinned trust anchor.' }
+    }
     Stop-AgentServices
     foreach ($name in @('RDPMonitorGateway','RDPMonitorWorker')) {
         if (Get-Service $name -ErrorAction SilentlyContinue) { Invoke-Checked 'sc.exe' @('delete',$name) }

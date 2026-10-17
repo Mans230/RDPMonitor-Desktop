@@ -89,8 +89,8 @@ class BackupHookGuardTests(unittest.TestCase):
         import scheduler
         self.scheduler = scheduler
 
-    def test_default_configuration_keeps_hooks_enabled(self):
-        self.assertIs(self.runtime.backend.backup.config.DEFAULT_CONFIG["backup"]["hooks_enabled"], True)
+    def test_default_configuration_disables_hooks(self):
+        self.assertIs(self.runtime.backend.backup.config.DEFAULT_CONFIG["backup"]["hooks_enabled"], False)
 
     def test_disabled_hooks_do_not_execute(self):
         cfg = {"backup": {"pre_command": "echo hello", "hooks_enabled": False}}

@@ -136,7 +136,7 @@ def run_hook(cfg, which, status="", cancel_event=None):
     cmd = (cfg["backup"].get(f"{which}_command") or "").strip()
     if not cmd:
         return True
-    if not cfg["backup"].get("hooks_enabled", True):
+    if not cfg["backup"].get("hooks_enabled", False):
         log("Backup %s-hook skipped: pre/post commands are disabled (hooks_enabled=false)" % which, "ERROR")
         return True
     if "\x00" in cmd:

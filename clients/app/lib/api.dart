@@ -145,7 +145,14 @@ class ProfileVault {
     if (slot == null) return [];
     final raw = await storage.read(key: 'rdpmonitor.profiles.$slot');
     if (raw == null) throw ApiException('The secure profile record is missing. Restore local access before enrolling again.');
-    return records(jsonDecode(raw)).map(MachineProfile.fromJson).toList();
+    dynamic decoded;
+    try { decoded = jsonDecode(raw); } catch (_) { throw ApiException('The secure profile record is unreadable. Restore local access before enrolling again.'); }
+    // Fail closed: a truncated or tampered record must never be read as "no
+    // profiles", or the next save silently overwrites the stored profiles.
+    if (decoded is! List || decoded.any((entry) => entry is! Map)) {
+      throw ApiException('The secure profile record is invalid. Restore local access before enrolling again.');
+    }
+    return decoded.map((entry) => MachineProfile.fromJson(object(entry))).toList();
   }
   Future<void> save(List<MachineProfile> profiles) async {
     final oldSlot = await storage.read(key: 'rdpmonitor.profile-slot');
@@ -210,6 +217,17 @@ class AgentApi {
     }
     return request.close().timeout(const Duration(seconds: 30));
   }
+  static const int _maxErrorBodyBytes = 8 * 1024;
+  static const int _maxBodyBytes = 64 * 1024;
+  Future<String> _body(HttpClientResponse response, [int limit = _maxBodyBytes]) async {
+    // Read at most `limit` bytes so a hostile or broken peer cannot make the client
+    // buffer an unbounded body before it has validated the status code.
+    final bytes = await response.fold<List<int>>([], (buffer, chunk) {
+      if (buffer.length < limit) buffer.addAll(chunk.take(limit - buffer.length));
+      return buffer;
+    });
+    return utf8.decode(bytes, allowMalformed: true);
+  }
   Future<Map<String, dynamic>> call(String method, String path, {dynamic body, Map<String, String>? query}) async {
     try {
       final response = await _send(method, path, body: body, query: query);
@@ -229,7 +247,7 @@ class AgentApi {
   Future<void> download(String id, File destination, {String? expectedHash}) async {
     final response = await _send('GET', '/artifacts/${Uri.encodeComponent(id)}');
     if (response.statusCode != 200) {
-      final text = await utf8.decoder.bind(response).join();
+      final text = await _body(response, _maxErrorBodyBytes);
       throw ApiException('Artifact download failed (${response.statusCode}): $text');
     }
     final temp = File('${destination.path}.rdpmonitor-${requestId()}.partial');
@@ -256,7 +274,7 @@ class AgentApi {
     request.contentLength = bytes.length;
     request.add(bytes);
     final response = await request.close().timeout(const Duration(seconds: 45));
-    final value = object(jsonDecode(await utf8.decoder.bind(response).join()));
+    final value = object(jsonDecode(await _body(response)));
     if (response.statusCode < 200 || response.statusCode >= 300) throw ApiException(object(value['error'])['message']?.toString() ?? 'Upload chunk failed.', status: response.statusCode);
     return object(value['upload']);
   }

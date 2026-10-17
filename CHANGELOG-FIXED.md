@@ -65,9 +65,9 @@ that architectural limitation is documented rather than hidden.
   introduced secret cannot silently become exportable or settable.
 - The job transport, durable events and audit records share one secret-name definition.
 - The update-availability comparison uses SHA-256 instead of MD5.
-- Backup pre/post hooks gained a `hooks_enabled` master switch (default on), refuse a
-  command containing a NUL byte, and are logged by SHA-256 fingerprint instead of the
-  command text, which may embed credentials.
+- Backup pre/post hooks gained a `hooks_enabled` master switch (default off; opt in),
+  refuse a command containing a NUL byte, and are logged by SHA-256 fingerprint instead
+  of the command text, which may embed credentials.
 - Reorganized client navigation: Diagnostics moved under Observe and Imaging moved under
   Manage, with the grouping rationale documented in code.
 - Added network-watch and hardening regression tests to `tests/`.
