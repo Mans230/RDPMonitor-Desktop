@@ -13,7 +13,7 @@ GuestInstallerRelease guestInstallerRelease() {
   if (!overridden) {
     return GuestInstallerRelease(
       url: 'https://github.com/Mans230/RDPMonitor-Desktop/releases/download/v1.0.0-preview.4/RDPMonitorGuest-1.0.0-windows-x64-UNSIGNED-PREVIEW-setup.exe',
-      sha256: '6094b1a5557012fefd7b23a630b43a4b2861700dacbad41a2e364735a3ecfe7d',
+      sha256: '3e122b4d69e13f255751bed13f7a8362041bdb02da7e84d3157085693a65d699',
       unsignedPreview: true,
     );
   }

@@ -292,6 +292,7 @@ class PipeServer:
 def pipe_call(name, request, expected_sid=None, maximum=MAX_MESSAGE, expected_session=None):
     py, _, con, _, file, pipe, _ = windows_modules()
     deadline = time.monotonic() + 5
+    observed_busy = False
     while True:
         try:
             handle = file.CreateFile(name, con.GENERIC_READ | con.GENERIC_WRITE, 0, None,
@@ -301,12 +302,22 @@ def pipe_call(name, request, expected_sid=None, maximum=MAX_MESSAGE, expected_se
             # WaitNamedPipe does not reserve an instance. Another client may win
             # CreateFile; retry only this handshake, never a submitted RPC.
             remaining = int((deadline - time.monotonic()) * 1000)
-            if exc.winerror != 231 or remaining <= 0:
+            # Once an instance was busy, ERROR_FILE_NOT_FOUND can mean the last
+            # accepted instance closed before the server created its successor.
+            # Preserve the existing handshake deadline; never retry a sent RPC.
+            if (remaining <= 0 or exc.winerror not in (2, 231)
+                    or (exc.winerror == 2 and not observed_busy)):
                 raise OperationError("worker_unavailable", "The local agent worker is unavailable.", 503) from None
+            observed_busy = True
             try:
                 pipe.WaitNamedPipe(name, remaining)
-            except py.error:
-                raise OperationError("worker_unavailable", "The local agent worker is unavailable.", 503) from None
+            except py.error as wait_error:
+                if wait_error.winerror != 2:
+                    raise OperationError("worker_unavailable", "The local agent worker is unavailable.", 503) from None
+                pause = min(0.01, deadline - time.monotonic())
+                if pause <= 0:
+                    raise OperationError("worker_unavailable", "The local agent worker is unavailable.", 503) from None
+                time.sleep(pause)
     # SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION prevents privileged server impersonation.
     try:
         validate_server(handle, expected_sid, expected_session)

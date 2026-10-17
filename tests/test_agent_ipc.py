@@ -6,6 +6,7 @@ import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 from agent.ipc import PipeServer, current_identity, pipe_call, protect_path
 
@@ -73,6 +74,76 @@ class PipeIdentityTests(unittest.TestCase):
         after_contention = request(24)
         self.assertEqual(after_contention['sid'], self.identity['sid'])
         self.assertEqual(after_contention['admin'], self.identity['admin'])
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows named pipes are required')
+class PipeConnectionTests(unittest.TestCase):
+    def test_instance_gap_after_contention_connects_without_replaying_rpc(self):
+        import pywintypes
+        import win32con
+        import win32file
+        import win32pipe
+
+        identity = current_identity()
+        name = r'\\.\pipe\RDPMonitor.InstanceGap.' + uuid.uuid4().hex
+        old_server = win32pipe.CreateNamedPipe(name, win32pipe.PIPE_ACCESS_DUPLEX,
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            1, 65536, 65536, 5000, None)
+        old_client = win32file.CreateFile(name, win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+            0, None, win32con.OPEN_EXISTING, 0, None)
+        stop = threading.Event()
+        calls, errors, native_errors = [], [], []
+
+        def handler(request, peer):
+            calls.append(peer['sid'])
+            return {'sid': peer['sid']}
+
+        server = PipeServer(name, handler, allowed_sids=[identity['sid']])
+
+        def serve():
+            try:
+                server.serve(stop)
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=serve, daemon=True)
+        original_wait = win32pipe.WaitNamedPipe
+        switched = False
+        started = False
+
+        def transition(pipe, timeout):
+            nonlocal switched, started
+            if not switched:
+                switched = True
+                old_client.Close()
+                old_server.Close()
+                try:
+                    return original_wait(pipe, timeout)
+                except pywintypes.error as error:
+                    # This is a real Windows no-instance result, not a fake
+                    # transport response. Recreate the real server afterward.
+                    native_errors.append(error.winerror)
+                    self.assertEqual(error.winerror, 2)
+                    thread.start()
+                    started = True
+                    raise
+            return original_wait(pipe, timeout)
+
+        try:
+            with mock.patch.object(win32pipe, 'WaitNamedPipe', side_effect=transition):
+                result = pipe_call(name, {'observe': True}, expected_sid=identity['sid'])
+            self.assertEqual(result['sid'], identity['sid'])
+            self.assertEqual(native_errors, [2])
+            self.assertEqual(calls, [identity['sid']])
+        finally:
+            stop.set()
+            if started:
+                thread.join(timeout=17)
+                self.assertFalse(thread.is_alive(), 'The replacement pipe server did not stop')
+            if not switched:
+                old_client.Close()
+                old_server.Close()
+            self.assertEqual(errors, [])
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows ACLs are required')

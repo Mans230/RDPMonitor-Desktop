@@ -103,7 +103,7 @@ Inno's post-install event does not roll back a committed runtime when its helper
 
 ## Observed implementation verification
 
-The implementation passed 195 backend and 30 client tests, including actual existing-CMD success/failure cleanup; analyzer checks were clean and the native Windows debug client built and ran. Earlier packaged-agent verification and real selector sockets covered bounded hard-abort teardown and quota retention. Real Windows ACL/DPAPI fixtures covered gateway root-only metadata access without private-file reads.
+The integrated source passed 196 backend and 30 client tests, including actual existing-CMD success/failure cleanup and a real Windows pipe instance-gap/no-replay regression; analyzer checks were clean and the native Windows debug client built and ran. Earlier packaged-agent verification and real selector sockets covered bounded hard-abort teardown and quota retention. Real Windows ACL/DPAPI fixtures covered gateway root-only metadata access without private-file reads.
 
 The actual broker CLI and bundled worker/gateway were exercised through native desktop invitation creation, encrypted-code enrollment, live mTLS telemetry, view-job completion and duplicate request identity, read-only/viewer denial, SHA256-verified report download, revocation on an unchanged live TLS socket, certificate renewal, broker loss/reconnect without job replay, and desktop process exit/relaunch from protected credentials while resident sampling continued.
 

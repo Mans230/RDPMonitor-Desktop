@@ -76,7 +76,7 @@ Copy-Item -LiteralPath $VCRedistributionNoticeFile -Destination (Join-Path $stag
 Copy-Item -LiteralPath $PSScriptRoot -Destination (Join-Path $stage 'scripts') -Recurse
 New-Item -ItemType Directory -Path (Join-Path $stage 'docs') | Out-Null
 Copy-Item -Path (Join-Path $Root 'docs\*') -Destination (Join-Path $stage 'docs') -Recurse
-Copy-Item -LiteralPath (Join-Path $Root 'LICENSE'),(Join-Path $Root 'README.md'),(Join-Path $Root 'SECURITY.md') -Destination $stage
+Copy-Item -LiteralPath (Join-Path $Root 'LICENSE'),(Join-Path $Root 'README.md'),(Join-Path $Root 'SECURITY.md'),(Join-Path $Root 'CHANGELOG-FIXED.md') -Destination $stage
 if (-not $GuestOnly) { Copy-Item -LiteralPath (Join-Path $Root 'clients\app\assets\fonts\OFL.txt') -Destination (Join-Path $stage 'GEIST-OFL.txt') }
 if (-not $UnsignedPreview -and -not $GuestOnly) { Copy-Item -LiteralPath (Join-Path $Root 'install.bat'),(Join-Path $Root 'uninstall.bat') -Destination $stage }
 Run $Python @((Join-Path $PSScriptRoot 'collect-licenses.py'),'--output',(Join-Path $stage 'PYTHON-THIRD-PARTY-NOTICES.txt'))

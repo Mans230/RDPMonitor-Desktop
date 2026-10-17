@@ -141,7 +141,7 @@ flutter analyze
 
 Tests exercise policy, certificate/replay/revocation boundaries, durable jobs/revisions, encrypted persistence, upload isolation/integrity and backup/recovery errors without changing host firewall/accounts/power.
 
-Latest Windows checks: **195 backend tests and 30 client tests passed**, including real CMD success/failure environment cleanup; `flutter analyze` reported no issues, and the native Windows debug client built and ran.
+Latest Windows checks: **196 backend tests and 30 client tests passed**, including real CMD success/failure cleanup and a deterministic real-Windows pipe instance-gap regression; `flutter analyze` reported no issues, and the native Windows debug client built and ran.
 
 The local integration smoke exercised the exact packaged worker and gateway executables over real named-pipe IPC, certificate enrollment, authenticated HTTPS telemetry/history, an overview job, duplicate-request identity, read-only denials and certificate revocation. The packaged hidden helper returned authenticated status for the signed-in session. IPC regressions cover OS-derived identity, concurrent clients, clean shutdown and protected worker-file ACLs. Snapshot reads use the persistent sampler; history projects bounded numeric measurements instead of repeating process inventories.
 
