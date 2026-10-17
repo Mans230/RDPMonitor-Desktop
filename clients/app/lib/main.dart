@@ -277,10 +277,10 @@ class _WorkspaceState extends State<Workspace> {
   Widget emptySetup() => Center(child: SingleChildScrollView(padding: const EdgeInsets.all(28), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
     const MonitorMark(size: 48), const SizedBox(height: 22),
     Text('Your fleet starts here', style: Theme.of(context).textTheme.headlineLarge),
-    const SizedBox(height: 12), Text('One setup code. Automatic connection.', style: Theme.of(context).textTheme.titleLarge),
+    const SizedBox(height: 12), Text('One CMD command. Automatic connection.', style: Theme.of(context).textTheme.titleLarge),
     const SizedBox(height: 12), const Text('Connect Windows VMs across networks without opening inbound management ports or configuring a VPN. Agent traffic remains end-to-end certificate-authenticated HTTPS inside the relay tunnel.'),
-    const SizedBox(height: 20), const Text('Choose Add machine, give it a name and group, then open the installer link on your VM and paste its private setup code. This desktop connects automatically when VM setup completes. Configure your self-hosted relay once if prompted.'),
-    const SizedBox(height: 16), const Text('This project does not supply a publicly hosted relay. Use the accurately labeled installer from GitHub Releases; unsigned previews are monitoring-only and are not production-signed installations. Invitations are single-use. Private client keys stay in OS-protected storage.'),
+    const SizedBox(height: 20), const Text('Choose Add machine, give it a name and group, then copy its private CMD command. Paste the line into Command Prompt as Administrator inside the VM. Only the background agent installs; no VM wizard or return code. This desktop connects automatically. Configure your self-hosted HTTPS relay once if prompted.'),
+    const SizedBox(height: 16), const Text('This project does not supply a publicly hosted relay. Unsigned guest previews require explicit consent and are monitoring-only, not production-signed installations. Invitations are single-use. Private client keys stay in OS-protected storage; the copied command remains private clipboard/CMD history.'),
     const SizedBox(height: 22), Wrap(spacing: 12, runSpacing: 12, children: [
       FilledButton.icon(onPressed: enroll, icon: const Icon(Icons.add), label: const Text('Add machine')),
       TextButton(onPressed: () => showRelaySettingsDialog(context), child: const Text('Relay settings')),

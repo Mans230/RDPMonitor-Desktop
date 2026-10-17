@@ -7,9 +7,10 @@ import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'design.dart';
+import 'guest_installation.dart';
+import 'guest_release.dart';
 import 'relay.dart';
 
-const _installerUrl = 'https://github.com/Mans230/RDPMonitor-Desktop/releases/download/v1.0.0-preview.3/RDPMonitor-1.0.0-windows-x64-UNSIGNED-PREVIEW-setup.exe';
 
 Future<void> showRelaySettingsDialog(BuildContext context) => showDialog<void>(
   context: context, barrierDismissible: false,
@@ -258,7 +259,6 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _group = TextEditingController();
-  final _code = TextEditingController();
   RelayPreferences? _prefs;
   RelayAdminClient? _admin;
   RelayPairingLookup? _lookup;
@@ -271,7 +271,9 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
   bool _waiting = false;
   bool _pendingStored = true;
   bool _copied = false;
-  bool _linkCopied = false;
+  bool _previewAccepted = false;
+  bool _copying = false;
+  GuestInstallerRelease? _release;
   String? _errorText;
   bool get _mustKeepOpen => _issued != null && !_pendingStored;
 
@@ -280,7 +282,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
   @override
   void dispose() {
     _stopWaiting(); _admin?.close();
-    _name.dispose(); _group.dispose(); _code.dispose();
+    _name.dispose(); _group.dispose();
     super.dispose();
   }
 
@@ -297,11 +299,13 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
       _pending = pending;
       _pendingStored = true;
       if (pending != null) {
-        _name.text = pending.name; _group.text = pending.group; _code.text = pending.setup.code;
+        _name.text = pending.name; _group.text = pending.group;
         if (pending.profile != null) _issued = MachineProfile.fromJson(pending.profile!);
       }
       _prefs = await RelayPreferences.load();
       if (!mounted) return;
+      try { _release = guestInstallerRelease(); }
+      catch (_) { _release = null; }
       setState(() => _loaded = true);
     } catch (error) {
       if (mounted) setState(() => _errorText = _relayError(error));
@@ -328,7 +332,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
       // Do not expose a usable code until its decryption key is durably recoverable.
       _pending = pending; _pendingStored = false;
       await pending.save();
-      _pendingStored = true; _code.text = pending.setup.code;
+      _pendingStored = true;
     } catch (error) { if (mounted) setState(() => _errorText = _relayError(error)); }
     finally {
       client?.close(); if (identical(_admin, client)) _admin = null;
@@ -426,7 +430,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
       if (_issued != null) {
         await _finishProfile();
       } else {
-        await _pending!.save(); _pendingStored = true; _code.text = _pending!.setup.code;
+        await _pending!.save(); _pendingStored = true;
       }
     } catch (error) { if (mounted) setState(() => _errorText = _relayError(error)); }
     finally { if (mounted) setState(() => _busy = false); }
@@ -447,26 +451,34 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
     setState(() { _busy = true; _errorText = null; });
     try {
       await PendingRelaySetup.clear();
-      if (mounted) setState(() { _pending = null; _issued = null; _code.clear(); _copied = false; _pendingStored = true; });
+      if (mounted) setState(() { _pending = null; _issued = null; _copied = false; _previewAccepted = false; _pendingStored = true; });
     } catch (error) { if (mounted) setState(() => _errorText = _relayError(error)); }
     finally { if (mounted) setState(() => _busy = false); }
   }
 
   Future<void> _copy() async {
-    if (_busy || _pending == null || !_pendingStored || !_pending!.canInstall()) return;
+    final pending = _pending;
+    final release = _release;
+    if (_busy || _copying || pending == null || release == null || !_pendingStored ||
+        !pending.canInstall() || pending.stage != RelaySetupStage.waiting ||
+        (release.unsignedPreview && !_previewAccepted)) { return; }
+    final generation = _generation;
+    setState(() { _copying = true; _errorText = null; });
     try {
-      await Clipboard.setData(ClipboardData(text: _pending!.setup.code));
-      if (mounted) setState(() => _copied = true);
-    } catch (_) { if (mounted) setState(() => _errorText = 'Could not copy the setup code. Check clipboard access and retry.'); }
-  }
-
-  Future<void> _copyInstaller() async {
-    try {
-      await Clipboard.setData(const ClipboardData(text: _installerUrl));
-      if (mounted) setState(() => _linkCopied = true);
-    } catch (_) {
-      if (mounted) setState(() => _errorText = 'Could not copy the installer link. Check clipboard access and retry.');
-    }
+      final command = await buildGuestInstallCommand(setupUri: pending.setup.code,
+        release: release, acceptUnsignedPreview: _previewAccepted);
+      // Asset loading must not copy a cancelled, expired or consumed invitation.
+      if (!mounted || generation != _generation || !identical(_pending, pending) ||
+          !pending.canInstall() || _pending!.stage != RelaySetupStage.waiting) { return; }
+      await Clipboard.setData(ClipboardData(text: command));
+      if (mounted && generation == _generation && identical(_pending, pending)) setState(() => _copied = true);
+    } catch (error) {
+      if (mounted && generation == _generation) {
+        setState(() => _errorText = error is FormatException
+          ? error.message.toString()
+          : 'Could not prepare or copy the CMD command. Check the bundled guest bootstrap and clipboard access, then retry.');
+      }
+    } finally { if (mounted) setState(() => _copying = false); }
   }
 
   void _close() {
@@ -493,7 +505,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
         mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (pending == null) ...[
-            const Text('Name the Windows VM, then run its installer with one private setup code. This desktop connects automatically after local approval on the VM.'),
+            const Text('Name the Windows VM, then paste one private command into an Administrator Command Prompt on that VM. The background guest agent installs silently and this desktop connects automatically.'),
             const SizedBox(height: 18),
             TextFormField(controller: _name, enabled: !_busy, decoration: const InputDecoration(labelText: 'Machine name'),
               validator: (value) => _validateLabel(value, isRequired: true)),
@@ -519,25 +531,29 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
             ] else if (pending.stage == RelaySetupStage.enrolled) ...[
               _notice(context, 'The protected issued identity could not be loaded. Restore OS credential storage before trying enrollment again.'),
             ] else if (!_pendingStored) ...[
-              _notice(context, 'The setup code is hidden until OS credential storage confirms its private recovery key. Retry secure storage before installing.'),
+              _notice(context, 'The private command is unavailable until OS credential storage confirms its recovery key. Retry secure storage before installing.'),
             ] else ...[
-              const Text('1. Download and run the installer on the Windows VM.'),
-              const SizedBox(height: 8),
-              Align(alignment: Alignment.centerLeft, child: OutlinedButton.icon(
-                onPressed: _busy ? null : _copyInstaller, icon: const Icon(Icons.download_outlined),
-                label: Text(_linkCopied ? 'Installer link copied' : 'Copy installer link'))),
-              const SizedBox(height: 8),
-              const Text('Preview 3 · Windows x64 · unsigned, monitoring-only.'),
-              const SizedBox(height: 16),
-              const Text('2. Paste this code into VM setup. Approve Windows elevation and local enrollment.'),
+              const Text('On the Windows VM, open Command Prompt as Administrator. Paste the copied line into that existing CMD window and press Enter. Keep this desktop open or reopen Add machine to connect automatically.'),
+              const SizedBox(height: 12),
+              _notice(context, 'Private capability: anyone with this command can use this one-VM invitation. Clipboard history, CMD history and transcription may retain it. Encoding is not encryption. Do not share it or pass it as a cmd /c argument.'),
+              const SizedBox(height: 12),
+              if (_release?.unsignedPreview ?? true)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero, controlAffinity: ListTileControlAffinity.leading,
+                  value: _previewAccepted,
+                  onChanged: _busy || _copying ? null : (value) => setState(() => _previewAccepted = value ?? false),
+                  title: const Text('I accept the unsigned monitoring-only preview.'),
+                  subtitle: const Text('Only continue if you trust this release source. The guest remains read-only; no administration, RDP, firewall or account changes are enabled.'),
+                )
+              else
+                const Text('Publisher-verified Windows x64 guest agent · monitoring-only.'),
               const SizedBox(height: 10),
-              TextFormField(controller: _code, readOnly: true, obscureText: true, enableInteractiveSelection: false,
-                decoration: const InputDecoration(labelText: 'Private VM setup code')),
-              const SizedBox(height: 10),
               Align(alignment: Alignment.centerLeft, child: OutlinedButton.icon(
-                onPressed: _busy || !pending.canInstall() ? null : _copy, icon: const Icon(Icons.copy_outlined), label: const Text('Copy setup code'))),
-              if (_copied) const Text('Keep this code private. Clipboard history may retain it.'),
-              Text('Install before ${pending.expires.toLocal().toString().split('.').first}. One VM only.'),
+                onPressed: _busy || _copying || !pending.canInstall() || _release == null ||
+                  (_release!.unsignedPreview && !_previewAccepted) ? null : _copy,
+                icon: const Icon(Icons.copy_outlined),
+                label: Text(_copying ? 'Preparing command…' : _copied ? 'CMD command copied' : 'Copy CMD command'))),
+              Text('Run before ${pending.expires.toLocal().toString().split('.').first}. One VM only.'),
               const SizedBox(height: 14),
               Text(_waiting ? 'Waiting for the VM. Connects automatically — no code to bring back.' : 'Waiting paused. Resume when the VM is ready.'),
               if (!pending.canInstall()) const Text('The installation invitation expired. A VM registered before expiry may still finish within the bounded five-minute enrollment window.'),
@@ -546,6 +562,8 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
             const SizedBox(height: 14),
             const Text('Close and reopen Add machine to resume this setup. Its private key stays in OS-protected storage.'),
           ],
+          if (_loaded && _release == null)
+            _error(context, 'The trusted guest installer release configuration is unavailable. Existing pending enrollment can still resume; new installation commands cannot be copied.'),
           if (_errorText != null) _error(context, _errorText!),
           if (!_loaded && !_busy) TextButton(onPressed: _load, child: const Text('Retry loading protected settings')),
           if (_busy || _waiting) const Padding(padding: EdgeInsets.only(top: 14), child: LinearProgressIndicator()),
@@ -556,7 +574,7 @@ class _AddMachineDialogState extends State<_AddMachineDialog> {
         TextButton(onPressed: _busy || _mustKeepOpen ? null : _close,
           child: Text(pending == null ? 'Cancel' : 'Close')),
         if (pending == null)
-          FilledButton(onPressed: _busy || !_loaded || _prefs == null ? null : _create, child: const Text('Create setup code'))
+          FilledButton(onPressed: _busy || !_loaded || _prefs == null || _release == null ? null : _create, child: const Text('Prepare CMD command'))
         else if (_issued != null || !_pendingStored)
           FilledButton(onPressed: _busy ? null : _retrySaving, child: Text(_issued != null ? 'Verify & save identity' : 'Retry secure storage'))
         else if (pending.stage == RelaySetupStage.waiting && !_waiting && pending.canWait())

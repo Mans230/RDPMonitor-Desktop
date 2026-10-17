@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import io
 import json
+import os
 import secrets
 import socket
 import ssl
@@ -11,6 +15,8 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from argparse import Namespace
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 from uuid import uuid4
@@ -129,6 +135,172 @@ class RelayBoundaryTests(unittest.TestCase):
 
 
 class NativeSetupCodeTests(unittest.TestCase):
+    def test_command_transport_requires_canonical_utf8_https_setup_not_legacy(self):
+        code = make_setup_invitation("https://relay.example", new_token(), bytes(range(32)))
+        encoded = base64.urlsafe_b64encode(code.encode("utf-8")).decode("ascii").rstrip("=")
+        self.assertEqual(setup._decode_command(encoded), code)
+        invalid = [None, "", encoded + "=", encoded + "\n", "A" * 5463,
+                   base64.urlsafe_b64encode(b"\xff").decode("ascii").rstrip("=")]
+        for value in (" " + code, code + "\n", code.replace("https", "http"),
+                      make_invitation("install", "https://relay.example", new_token()),
+                      code + "=", code.replace("v=1", "v=2")):
+            invalid.append(base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("="))
+        # The alternate trailing pad bits decode to the same bytes but are not canonical.
+        if len(encoded) % 4:
+            alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+            invalid.append(encoded[:-1] + alphabet[alphabet.index(encoded[-1]) + 1])
+        for value in invalid:
+            with self.subTest(value_length=len(value) if value else 0), self.assertRaises(ValueError) as error:
+                setup._decode_command(value)
+            self.assertNotIn(code, str(error.exception))
+
+    def test_import_command_rejects_before_machine_access_and_scrubs_environment(self):
+        code = make_setup_invitation("https://relay.example", new_token(), bytes(range(32)))
+        encoded = base64.urlsafe_b64encode(code.encode("utf-8")).decode("ascii").rstrip("=")
+        for admin, value, consent in ((False, encoded, True), (True, "invalid", True),
+                                      (True, encoded, False)):
+            with self.subTest(admin=admin, consent=consent), \
+                    mock.patch.dict(os.environ, {"RDP_MONITOR_SETUP": value,
+                        "RDP_MONITOR_PREVIEW_ACCEPT": "I_ACCEPT_UNSIGNED_MONITORING_ONLY" if consent else ""}), \
+                    mock.patch.object(setup, "current_identity", return_value={"admin": admin}), \
+                    mock.patch.object(setup, "_require_fresh") as fresh, \
+                    mock.patch.object(setup, "_session") as session, \
+                    redirect_stderr(io.StringIO()) as diagnostics:
+                result = setup.main(["import-command", "--session", "a" * 32,
+                                     "--unsigned-preview", "--preview-consent"])
+                self.assertEqual(result, 1)
+                self.assertNotIn("RDP_MONITOR_SETUP", os.environ)
+                self.assertNotIn("RDP_MONITOR_PREVIEW_ACCEPT", os.environ)
+                self.assertNotIn(code, diagnostics.getvalue())
+                self.assertNotIn(encoded, diagnostics.getvalue())
+                fresh.assert_not_called()
+                session.assert_not_called()
+
+    def test_malformed_import_arguments_also_consume_environment(self):
+        with mock.patch.dict(os.environ, {"RDP_MONITOR_SETUP": "private-capability",
+                "RDP_MONITOR_PREVIEW_ACCEPT": "I_ACCEPT_UNSIGNED_MONITORING_ONLY"}), \
+                redirect_stderr(io.StringIO()) as diagnostics:
+            with self.assertRaises(SystemExit):
+                setup.main(["import-command"])
+            self.assertNotIn("RDP_MONITOR_SETUP", os.environ)
+            self.assertNotIn("RDP_MONITOR_PREVIEW_ACCEPT", os.environ)
+            self.assertNotIn("private-capability", diagnostics.getvalue())
+
+    def test_import_command_writes_only_validated_protected_invitation(self):
+        code = make_setup_invitation("https://relay.example", new_token(), bytes(range(32)))
+        encoded = base64.urlsafe_b64encode(code.encode("utf-8")).decode("ascii").rstrip("=")
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.dict(os.environ, {"RDP_MONITOR_SETUP": encoded,
+                    "RDP_MONITOR_PREVIEW_ACCEPT": "I_ACCEPT_UNSIGNED_MONITORING_ONLY"}), \
+                mock.patch.object(setup, "current_identity", return_value={"admin": True}), \
+                mock.patch.object(setup, "_require_fresh"), \
+                mock.patch.object(setup, "_session", return_value=Path(temporary)), \
+                mock.patch.object(setup, "verify_protected_tree"), \
+                mock.patch.object(setup, "protect_path"):
+            self.assertEqual(setup.main(["import-command", "--session", "b" * 32,
+                "--unsigned-preview", "--preview-consent"]), 0)
+            self.assertNotIn("RDP_MONITOR_SETUP", os.environ)
+            self.assertEqual((Path(temporary) / "invitation.txt").read_text(), code)
+            self.assertEqual((Path(temporary) / "command.txt").read_text(), "1")
+            installation, key = setup._installation_input(Path(temporary))
+            self.assertEqual(parse_invitation(installation, kind="install").origin, "https://relay.example")
+            self.assertEqual(key, bytes(range(32)))
+            self.assertFalse((Path(temporary) / "invitation.txt").exists())
+
+    def test_command_import_refuses_retained_deployment_identity_or_registration(self):
+        for relative in ("deployment.json", "identity.json", "gateway/relay.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                retained = root / relative
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                retained.write_text("retained", encoding="utf-8")
+                with mock.patch.object(setup, "data_directory", return_value=root), \
+                        mock.patch.object(setup, "register_services") as register, \
+                        mock.patch.object(setup, "_service_action") as action:
+                    with self.assertRaises(ValueError):
+                        setup._require_fresh()
+                    self.assertEqual(retained.read_text(), "retained")
+                    register.assert_not_called()
+                    action.assert_not_called()
+
+    def test_guest_preview_authentication_checks_component_and_excludes_client(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(setup, "verify_protected_tree"):
+            package = Path(temporary)
+            release = package / "release.json"
+            release.write_text(json.dumps({"version": "1.0.0", "component": "guest"}), encoding="utf-8")
+            preview = {"format": 1, "version": "1.0.0", "component": "guest",
+                       "unsigned_preview": True, "read_only": True,
+                       "files": [{"path": "release.json", "size": release.stat().st_size,
+                                  "sha256": hashlib.sha256(release.read_bytes()).hexdigest()}]}
+            (package / "preview.json").write_text(json.dumps(preview), encoding="utf-8")
+            self.assertEqual(setup._verify_package(package, "", True, component="guest")["component"], "guest")
+            with self.assertRaises(ValueError):
+                setup._verify_package(package, "", True)
+            (package / "client").mkdir()
+            with self.assertRaises(ValueError):
+                setup._verify_package(package, "", True, component="guest")
+
+    def test_command_install_rejects_wrong_component_consent_or_role_before_services(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "releases" / "1.0.0"
+            package.mkdir(parents=True)
+            args = Namespace(session="c" * 32, package=package, cmd_bootstrap=True,
+                             guest_only=True, read_only=True, unsigned_preview=True,
+                             preview_consent=True, publisher_thumbprint=None)
+            with mock.patch.object(setup, "_session", return_value=root), \
+                    mock.patch.object(setup, "_command_session"), \
+                    mock.patch.object(setup, "_installation_input", return_value=("private-installation", bytes(32))), \
+                    mock.patch.object(setup, "install_directory", return_value=root), \
+                    mock.patch.object(setup, "verify_protected_tree"), \
+                    mock.patch.object(setup, "_normalize_owner"), \
+                    mock.patch.object(setup, "_verify_package", return_value={"version": "1.0.0", "component": "suite"}), \
+                    mock.patch.object(setup, "_save_deployment") as save, \
+                    mock.patch.object(setup, "register_services") as register:
+                for attribute in ("guest_only", "read_only", "preview_consent"):
+                    setattr(args, attribute, False)
+                    with self.subTest(attribute=attribute), self.assertRaises((ValueError, PermissionError)):
+                        setup.install(args)
+                    setattr(args, attribute, True)
+                with self.assertRaises(ValueError):
+                    setup.install(args)
+                save.assert_not_called()
+                register.assert_not_called()
+
+    def test_signed_command_provisioning_remains_read_only_and_persists_guest_component(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "releases" / "1.0.0"
+            package.mkdir(parents=True)
+            # Trust pin already exists; this fixture never installs a real certificate or service.
+            (root / "publisher.cer").write_bytes(b"test-pinned-certificate")
+            args = Namespace(session="d" * 32, package=package, cmd_bootstrap=True, guest_only=True,
+                             read_only=True, unsigned_preview=False, preview_consent=False,
+                             publisher_thumbprint="AB" * 20)
+            with mock.patch.object(setup, "_session", return_value=root), \
+                    mock.patch.object(setup, "_command_session"), \
+                    mock.patch.object(setup, "_installation_input", return_value=("private-installation", bytes(range(32)))), \
+                    mock.patch.object(setup, "install_directory", return_value=root), \
+                    mock.patch.object(setup, "data_directory", return_value=root), \
+                    mock.patch.object(setup, "verify_protected_tree"), \
+                    mock.patch.object(setup, "_normalize_owner"), \
+                    mock.patch.object(setup, "_verify_package", return_value={"version": "1.0.0", "component": "guest"}), \
+                    mock.patch.object(setup, "_deployment", return_value=None), \
+                    mock.patch.object(setup, "_save_deployment") as save, \
+                    mock.patch.object(setup, "_write"), \
+                    mock.patch.object(setup, "register_services"), \
+                    mock.patch.object(relay, "register_installation"), \
+                    mock.patch.object(setup, "_entrypoint"), \
+                    mock.patch.object(setup, "_service_action"), \
+                    mock.patch.object(setup, "_ready"), \
+                    mock.patch.object(setup, "pair"):
+                setup.install(args)
+                deployment = save.call_args.args[0]
+                self.assertEqual(deployment["component"], "guest")
+                self.assertIs(deployment["read_only"], True)
+                self.assertIs(deployment["unsigned_preview"], False)
+                self.assertEqual(deployment["publisher_thumbprint"], "AB" * 20)
+
     def test_native_exchange_strips_pairing_key_before_registration_and_keeps_legacy_input(self):
         key = bytes(range(32))
         install_token = encode_secret(bytes(range(32, 64)))

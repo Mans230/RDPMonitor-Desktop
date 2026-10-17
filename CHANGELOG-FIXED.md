@@ -82,3 +82,16 @@ that architectural limitation is documented rather than hidden.
 - Fleet mutations reject unreadable/unloaded vault state; post-commit cleanup cannot falsely roll back saved metadata. Nested JSON inspectors no longer share expansion booleans with selectable-text scroll offsets.
 - Retained merged PR #1 network monitoring/hardening and PR #2 bounded relay lookup/WebSocket Origin checks. Missing reachability measurements are labeled honestly.
 - Verification: 187 backend tests and 25 client tests passed, analyzer clean, actual native automatic enrollment and failed-probe/no-replay recovery exercised. Installed SCM/reboot/signing/public relay acceptance remains external.
+
+## Desktop Preview 4 — one-command Windows guest installation
+
+- Add machine prepares one private Administrator CMD command from the requested name/group. The background guest installs silently and the desktop enrolls automatically; no VM desktop app, wizard, manual setup-code entry or return code.
+- Added a distinct guest-only runtime/native installer with explicit package components. Guest artifacts omit the Flutter client and desktop shortcut; install, repair, signed update and rollback reject component drift.
+- The trusted desktop-bundled public bootstrap downloads only a native executable over HTTPS, verifies its pinned SHA256 and production publisher when applicable, and uses a protected cache. No downloaded script executes, and production trust failures never become unsigned previews.
+- Private setup capabilities move through environment into a protected native exchange, never PowerShell/installer arguments or download URLs. Fresh CMD provisioning rejects retained identity/services and always forces monitoring-only/viewer, even for signed builds. Clipboard/CMD history remains private; encoding is not encryption.
+- Actual native preparation/consent/copy, narrow/wide layouts, protected pending close/reopen, strict HTTPS/WSS automatic enrollment and live disk telemetry were exercised. Native silent preflight, OS-only-PATH frozen import and download/hash/publisher rejection were exercised separately; installed SCM/reboot/production signing remain external VM acceptance gates.
+- Retained merged security follow-up PR #3: fail-closed vault decoding, bounded client response buffering, encoded event paths, pinned removal authority, verified Microsoft imaging staging, PowerShell/VSS argument validation and explicit backup ACL diagnostics.
+- Compatibility note: backup hooks now default **off**. Operators who intentionally use pre/post commands must explicitly set `backup.hooks_enabled` to `true`; the unsigned/CMD monitoring-only policy still disables administration and schedules.
+- Corrected a Windows named-pipe connection race exposed by integration verification: after contention, the last instance can disappear before its successor exists. The existing five-second handshake now survives that known-busy gap without retrying a submitted RPC; a real Windows-handle regression proves exactly one execution.
+- Integrated verification: 196 backend tests and 30 client tests passed; analyzer clean. Full installed service/reboot, production signing and public relay acceptance remain separate external gates.
+

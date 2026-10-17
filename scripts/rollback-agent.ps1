@@ -11,7 +11,10 @@ $recovery = Join-Path (Join-Path $env:ProgramData 'RDPMonitorRecovery') $UpdateI
 Assert-NoReparse $recovery
 $snapshot = Join-Path $recovery 'data'
 $previous = Get-Content -LiteralPath (Join-Path $snapshot 'deployment.json') -Raw | ConvertFrom-Json
-$release = Read-Release $previous.release $current.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer')
+$component = if ($current.PSObject.Properties.Name -contains 'component') { [string]$current.component } else { 'suite' }
+$previousComponent = if ($previous.PSObject.Properties.Name -contains 'component') { [string]$previous.component } else { 'suite' }
+if ($previousComponent -ne $component) { throw 'Rollback cannot change suite/guest installation identity.' }
+$release = Read-Release $previous.release $current.publisher_thumbprint (Join-Path $InstallRoot 'publisher.cer') -Component $component
 if ([int]$previous.data_schema -lt [int]$release.min_data_schema -or [int]$previous.data_schema -gt [int]$release.max_data_schema) { throw 'Saved state is incompatible with previous release; binary downgrade refused.' }
 foreach ($entry in Get-Content -LiteralPath (Join-Path $recovery 'snapshot.json') -Raw | ConvertFrom-Json) {
     if ($entry.path -match '(^[\\/]|:|(^|[\\/])\.\.([\\/]|$))') { throw 'Unsafe snapshot path.' }

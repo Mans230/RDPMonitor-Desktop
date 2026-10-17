@@ -6,6 +6,7 @@ an invitation, route credential or connection code on its command line.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -112,6 +113,65 @@ def _deployment() -> dict | None:
     return result
 
 
+def _require_fresh() -> None:
+    """Command provisioning never repairs or replaces a retained machine identity."""
+    root = data_directory()
+    for relative in ('deployment.json', 'identity.json', 'gateway/relay.json'):
+        if (root / relative).exists():
+            raise ValueError('Command setup requires a fresh machine; use interactive maintenance')
+    import win32serviceutil
+    for name in (WORKER, GATEWAY):
+        try:
+            win32serviceutil.QueryServiceStatus(name)
+        except Exception as exc:
+            if getattr(exc, 'winerror', None) == 1060:
+                continue
+            raise
+        raise ValueError('Command setup cannot replace existing services')
+
+
+def _decode_command(value: str | None) -> str:
+    """Decode the bounded canonical transport without including it in errors."""
+    from relay.protocol import parse_setup_invitation
+    if not isinstance(value, str) or not 1 <= len(value) <= 5462 or not re.fullmatch(r'[A-Za-z0-9_-]+', value):
+        raise ValueError('Invalid command setup capability')
+    try:
+        raw = base64.b64decode(value + '=' * (-len(value) % 4), altchars=b'-_', validate=True)
+        if len(raw) > 4096 or base64.urlsafe_b64encode(raw).decode('ascii').rstrip('=') != value:
+            raise ValueError
+        invitation = raw.decode('utf-8', errors='strict')
+        if invitation != invitation.strip() or not invitation.startswith('rdpmonitor://setup?'):
+            raise ValueError
+        parse_setup_invitation(invitation)
+        return invitation
+    except (ValueError, UnicodeError):
+        raise ValueError('Invalid command setup capability') from None
+
+
+def import_command(session: str, value: str | None, *, unsigned_preview=False, preview_consent=False) -> None:
+    # Validate before creating directories, reading SCM, or touching machine state.
+    invitation = _decode_command(value)
+    if unsigned_preview and not preview_consent:
+        raise PermissionError('Unsigned command setup requires explicit monitoring-only consent')
+    if not re.fullmatch(r'[0-9a-f]{32}', session):
+        raise ValueError('Invalid setup session identifier')
+    _require_fresh()
+    path = _session(session, create=True)
+    try:
+        _write(path / 'invitation.txt', invitation)
+        _write(path / 'command.txt', '1')
+        _write(path / 'registered.txt', '0')
+    except Exception:
+        shutil.rmtree(path)
+        raise
+
+
+def _command_session(path: Path) -> None:
+    if (path / 'command.txt').read_text(encoding='ascii') != '1':
+        raise ValueError('Missing validated command setup session')
+    _require_fresh()
+
+
 def prepare(session: str) -> None:
     root = data_directory()
     exchange = root / 'setup'
@@ -154,24 +214,42 @@ def _service_action(action: str) -> None:
                 win32serviceutil.WaitForServiceStatus(name, win32service.SERVICE_RUNNING, 90)
 
 
-def stage(session: str, version: str, unsigned_preview: bool) -> None:
-    _session(session)
+def stage(session: str, version: str, unsigned_preview: bool, *, cmd_bootstrap=False, guest_only=False) -> None:
+    path = _session(session)
+    if cmd_bootstrap and not guest_only:
+        raise ValueError('Command staging requires the explicit guest component')
+    if cmd_bootstrap:
+        _command_session(path)
+        invitation = (path / 'invitation.txt').read_text(encoding='utf-8')
+        _decode_command(base64.urlsafe_b64encode(invitation.encode('utf-8')).decode('ascii').rstrip('='))
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Invalid release version')
     deployment = _deployment()
     if deployment:
-        if deployment['version'] != version or bool(deployment.get('unsigned_preview')) != unsigned_preview:
+        component = 'guest' if guest_only else 'suite'
+        if (deployment['version'] != version or bool(deployment.get('unsigned_preview')) != unsigned_preview
+                or deployment.get('component', 'suite') != component):
             raise ValueError('Use the signed update lifecycle for version/trust changes; this wizard repairs only the same release')
         _service_action('stop')
+    _protected_directory(install_directory(), code=True)
+    _protected_directory(install_directory() / 'releases', code=True)
     _protected_directory(install_directory() / 'releases' / version, code=True)
 
 
-def _verify_package(package: Path, thumbprint: str, preview: bool) -> dict:
+def _verify_package(package: Path, thumbprint: str, preview: bool, *, component='suite') -> dict:
     verify_protected_tree(package)
+    if component not in ('guest', 'suite'):
+        raise ValueError('Invalid package component')
+    if component == 'guest' and (package / 'client').exists():
+        raise ValueError('Guest package contains a desktop client')
     if preview:
         manifest = json.loads((package / 'preview.json').read_text(encoding='utf-8-sig'))
         if manifest.get('format') != 1 or manifest.get('unsigned_preview') is not True or manifest.get('read_only') is not True:
             raise ValueError('Not an explicitly monitoring-only preview package')
+        release = json.loads((package / 'release.json').read_text(encoding='utf-8-sig'))
+        if (manifest.get('component', 'suite') != component or release.get('component', 'suite') != component
+                or manifest.get('version') != release.get('version')):
+            raise ValueError('Preview release component/version mismatch')
         expected = set()
         for item in manifest['files']:
             relative = item['path']
@@ -204,12 +282,12 @@ $pinned=$env:RDP_SETUP_PINNED
 $s=Get-AuthenticodeSignature -LiteralPath $helper
 if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Thumbprint -ne $thumbprint) { throw 'Untrusted deployment helper' }
 . $helper
-Read-Release $package $thumbprint $pinned | Out-Null
+Read-Release $package $thumbprint $pinned -Component $env:RDP_SETUP_COMPONENT | Out-Null
 '''
-    import base64
     pinned = install_directory() / 'publisher.cer'
     environment = dict(os.environ, RDP_SETUP_HELPER=str(helper), RDP_SETUP_PACKAGE=str(package),
-                       RDP_SETUP_THUMBPRINT=normalized, RDP_SETUP_PINNED=str(pinned) if pinned.exists() else '')
+                       RDP_SETUP_THUMBPRINT=normalized, RDP_SETUP_PINNED=str(pinned) if pinned.exists() else '',
+                       RDP_SETUP_COMPONENT=component)
     command = [str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'),
                '-NoProfile', '-NonInteractive', '-EncodedCommand', base64.b64encode(script.encode('utf-16-le')).decode('ascii')]
     result = subprocess.run(command, capture_output=True, check=False, env=environment,
@@ -259,11 +337,11 @@ def _installation_input(path: Path) -> tuple[str | None, bytes | None]:
     from relay.protocol import parse_invitation, parse_setup_invitation
     from .relay import relay_settings_path
     invitation_file = path / 'invitation.txt'
-    if relay_settings_path(data_directory()).exists():
-        if invitation_file.exists():
-            raise ValueError('Already registered; use the explicit pair-installed flow')
-        return None, None
     try:
+        if relay_settings_path(data_directory()).exists():
+            if invitation_file.exists():
+                raise ValueError('Already registered; use the explicit pair-installed flow')
+            return None, None
         verify_protected_tree(invitation_file, recursive=False)
         if invitation_file.stat().st_size > 8192:
             raise ValueError('Invitation exceeds limit')
@@ -307,27 +385,44 @@ def pair(session: str) -> None:
 
 def install(args) -> None:
     path = _session(args.session)
+    command = bool(getattr(args, 'cmd_bootstrap', False))
+    expected_component = 'guest' if getattr(args, 'guest_only', False) else 'suite'
+    if command and expected_component != 'guest':
+        raise ValueError('Command setup requires the explicit guest component')
+    if command:
+        _command_session(path)
+        if not args.read_only:
+            raise PermissionError('Command setup is monitoring-only')
+    if args.unsigned_preview and not args.preview_consent:
+        raise PermissionError('Unsigned preview requires explicit affirmative monitoring-only consent')
     invitation, pairing_secret = _installation_input(path)
+    if command and (invitation is None or pairing_secret is None):
+        raise ValueError('Command setup requires an automatic HTTPS setup invitation')
     package = args.package.absolute()
     if package.parent != install_directory() / 'releases':
         raise ValueError('Payload must be installed in the protected versioned Program Files directory')
-    if args.unsigned_preview and not args.preview_consent:
-        raise PermissionError('Unsigned preview requires explicit affirmative monitoring-only consent')
     verify_protected_tree(package, recursive=False)
     _normalize_owner(package, recursive=True)
-    manifest = _verify_package(package, args.publisher_thumbprint or '', args.unsigned_preview)
+    manifest = _verify_package(package, args.publisher_thumbprint or '', args.unsigned_preview, component=expected_component)
+    component = manifest.get('component', 'suite')
+    if component != expected_component or (command and component != 'guest'):
+        raise ValueError('Package component does not permit command provisioning')
+    if component == 'guest' and (package / 'client').exists():
+        raise ValueError('Guest package contains a desktop client')
     if manifest['version'] != package.name:
         raise ValueError('Manifest version differs from protected release directory')
     deployment = _deployment()
-    if deployment and (deployment['release'] != str(package) or bool(deployment.get('unsigned_preview')) != args.unsigned_preview):
+    if deployment and (deployment['release'] != str(package) or bool(deployment.get('unsigned_preview')) != args.unsigned_preview
+                       or deployment.get('component', 'suite') != component):
         raise ValueError('Installed identity/trust cannot be replaced by the repair wizard')
     if deployment is None:
-        deployment = {'version': manifest['version'], 'release': str(package), 'data_schema': int(manifest.get('data_schema', 1)),
+        deployment = {'version': manifest['version'], 'release': str(package), 'component': component,
+                      'data_schema': int(manifest.get('data_schema', 1)),
                       'api': 1, 'host': '127.0.0.1', 'port': 8443, 'scope': 'Local',
                       'remote_addresses': [], 'interfaces': [], 'installed_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                       'unsigned_preview': args.unsigned_preview, 'read_only': bool(args.unsigned_preview or args.read_only),
                       'publisher_thumbprint': '' if args.unsigned_preview else args.publisher_thumbprint.replace(' ', '').upper()}
-    if args.unsigned_preview:
+    if args.unsigned_preview or command:
         deployment['read_only'] = True
     _save_deployment(deployment)
     if not args.unsigned_preview:
@@ -352,7 +447,8 @@ def remove(package: Path) -> None:
     deployment = _deployment()
     if not deployment or Path(deployment['release']) != package.absolute():
         raise ValueError('Uninstaller does not match the active release')
-    _verify_package(package, deployment.get('publisher_thumbprint', ''), bool(deployment.get('unsigned_preview')))
+    _verify_package(package, deployment.get('publisher_thumbprint', ''), bool(deployment.get('unsigned_preview')),
+                    component=deployment.get('component', 'suite'))
     _service_action('remove')
     _entrypoint(package, remove=True)
     # Retain identities, enrolled devices, publisher trust, deployment recovery
@@ -360,16 +456,24 @@ def remove(package: Path) -> None:
 
 
 def main(argv=None) -> int:
+    # Consume immediately, including malformed argv, authorization and parse failures.
+    value = os.environ.pop('RDP_MONITOR_SETUP', None)
+    preview_accept = os.environ.pop('RDP_MONITOR_PREVIEW_ACCEPT', None)
     parser = argparse.ArgumentParser(prog='rdpmonitor-agent setup')
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('surface', help='Describe setup surface without filesystem or SCM mutation')
-    for name in ('prepare', 'pair', 'cleanup'):
+    for name in ('prepare', 'pair', 'cleanup', 'import-command'):
         command = commands.add_parser(name)
         command.add_argument('--session', required=True)
+        if name == 'import-command':
+            command.add_argument('--unsigned-preview', action='store_true')
+            command.add_argument('--preview-consent', action='store_true')
     command = commands.add_parser('stage')
     command.add_argument('--session', required=True)
     command.add_argument('--version', required=True)
     command.add_argument('--unsigned-preview', action='store_true')
+    command.add_argument('--cmd-bootstrap', action='store_true')
+    command.add_argument('--guest-only', action='store_true')
     command = commands.add_parser('install')
     command.add_argument('--session', required=True)
     command.add_argument('--package', type=Path, required=True)
@@ -377,21 +481,28 @@ def main(argv=None) -> int:
     command.add_argument('--unsigned-preview', action='store_true')
     command.add_argument('--preview-consent', action='store_true')
     command.add_argument('--read-only', action='store_true')
+    command.add_argument('--cmd-bootstrap', action='store_true')
+    command.add_argument('--guest-only', action='store_true')
     command = commands.add_parser('remove')
     command.add_argument('--package', type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == 'surface':
-        print(json.dumps({'protocol': 1, 'commands': ['prepare', 'stage', 'install', 'pair', 'cleanup', 'remove'],
-                          'secret_exchange': 'protected ProgramData setup session files', 'preview': 'forced read_only'}))
+        print(json.dumps({'protocol': 1, 'commands': ['prepare', 'import-command', 'stage', 'install', 'pair', 'cleanup', 'remove'],
+                          'secret_exchange': 'protected ProgramData setup session files', 'preview': 'forced read_only',
+                          'command_setup': 'fresh guest component only; forced viewer'}))
         return 0
     path = None
     try:
         if not current_identity()['admin']:
             raise PermissionError('Setup requires an elevated local administrator')
-        if args.command == 'prepare':
+        if args.command == 'import-command':
+            import_command(args.session, value, unsigned_preview=args.unsigned_preview,
+                           preview_consent=args.preview_consent and preview_accept == 'I_ACCEPT_UNSIGNED_MONITORING_ONLY')
+        elif args.command == 'prepare':
             prepare(args.session)
         elif args.command == 'stage':
-            stage(args.session, args.version, args.unsigned_preview)
+            stage(args.session, args.version, args.unsigned_preview, cmd_bootstrap=args.cmd_bootstrap,
+                  guest_only=args.guest_only)
         elif args.command == 'install':
             install(args)
         elif args.command == 'pair':
@@ -405,7 +516,7 @@ def main(argv=None) -> int:
         # Never stringify an exception from a network/crypto/file operation: it
         # may embed invitation fragments, response data or credentials.
         print(f'RDPMonitor setup failed [{type(exc).__name__}]. No secret details were logged.', file=sys.stderr)
-        if hasattr(args, 'session'):
+        if hasattr(args, 'session') and args.command != 'import-command':
             try:
                 path = _session(args.session)
                 _write(path / 'status.txt', f'Setup failed ({type(exc).__name__}). Registration/data were preserved. Repair or generate a fresh code after resolving connectivity/signature/service prerequisites.')

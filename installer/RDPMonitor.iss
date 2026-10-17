@@ -11,19 +11,30 @@
 #ifndef PublisherThumbprint
   #define PublisherThumbprint ""
 #endif
+#ifdef GuestOnly
+  #define ProductPrefix "RDPMonitorGuest"
+  #define ProductLabel "RDPMonitor Guest background agent"
+#else
+  #define ProductPrefix "RDPMonitor"
+  #define ProductLabel "RDPMonitor"
+#endif
 #ifdef UnsignedPreview
-  #define DisplayName "RDPMonitor UNSIGNED monitoring-only preview"
-  #define ArtifactName "RDPMonitor-" + ReleaseVersion + "-windows-x64-UNSIGNED-PREVIEW-setup"
+  #define DisplayName ProductLabel + " UNSIGNED monitoring-only preview"
+  #define ArtifactName ProductPrefix + "-" + ReleaseVersion + "-windows-x64-UNSIGNED-PREVIEW-setup"
 #else
   #ifndef ProductionSigned
     #error Production setup requires the authenticated signed build pipeline; use explicit UnsignedPreview for monitoring-only evaluation
   #endif
-  #define DisplayName "RDPMonitor"
-  #define ArtifactName "RDPMonitor-" + ReleaseVersion + "-windows-x64-setup"
+  #define DisplayName ProductLabel
+  #define ArtifactName ProductPrefix + "-" + ReleaseVersion + "-windows-x64-setup"
 #endif
 
 [Setup]
+#ifdef GuestOnly
+AppId={{25D349CB-74F1-4D78-984B-777A296B26B4}
+#else
 AppId={{568BEECA-79EC-48D2-BC98-36776044AE41}
+#endif
 AppName={#DisplayName}
 AppVersion={#ReleaseVersion}
 AppPublisher=RDPMonitor contributors
@@ -42,7 +53,11 @@ SetupLogging=no
 CloseApplications=no
 RestartApplications=no
 UninstallDisplayName={#DisplayName}
+#ifdef GuestOnly
+UninstallFilesDir={app}\uninstall-guest
+#else
 UninstallFilesDir={app}\uninstall
+#endif
 #ifdef ProductionSigned
 SignTool=publisher
 SignedUninstaller=yes
@@ -52,10 +67,16 @@ SignedUninstaller=yes
 ; A complete private bootstrap runtime, used before any secret is written. The
 ; signed setup authenticates this embedded copy; it is never an arbitrary Python.
 Source: "{#PackageDir}\agent\*"; DestDir: "{tmp}\bootstrap"; Flags: dontcopy recursesubdirs createallsubdirs
+#ifdef GuestOnly
+Source: "{#PackageDir}\*"; DestDir: "{app}\releases\{#ReleaseVersion}"; Excludes: "client,client\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+#else
 Source: "{#PackageDir}\*"; DestDir: "{app}\releases\{#ReleaseVersion}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#endif
 
+#ifndef GuestOnly
 [Icons]
 Name: "{commonprograms}\RDPMonitor"; Filename: "{app}\releases\{#ReleaseVersion}\client\rdpmonitor.exe"
+#endif
 
 [Code]
 var
@@ -67,7 +88,29 @@ var
   CopyButton, RefreshButton: TNewButton;
   ReadOnlyCheck: TNewCheckBox;
   Session, SessionDir, Bootstrap, InstalledRelease: String;
-  Registered, PairOnly, FinishedPairing, Prepared, PostInstallFailed: Boolean;
+  Registered, PairOnly, FinishedPairing, Prepared, PostInstallFailed, CmdBootstrap: Boolean;
+
+function SetEnvironmentVariable(Name: String; Value: Integer): Boolean;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
+procedure ClearCommandEnvironment;
+begin
+  SetEnvironmentVariable('RDP_MONITOR_SETUP', 0);
+  SetEnvironmentVariable('RDP_MONITOR_PREVIEW_ACCEPT', 0);
+  SetEnvironmentVariable('RDP_MONITOR_INSTALLER_URL', 0);
+  SetEnvironmentVariable('RDP_MONITOR_INSTALLER_SHA256', 0);
+  SetEnvironmentVariable('RDP_MONITOR_INSTALLER_MODE', 0);
+  SetEnvironmentVariable('RDP_MONITOR_PUBLISHER', 0);
+  SetEnvironmentVariable('RDP_MONITOR_BOOTSTRAP', 0);
+end;
+
+function HasSwitch(const Name: String): Boolean;
+var I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/' + Name) = 0 then Result := True;
+end;
 
 function Quote(const Value: String): String;
 begin
@@ -120,10 +163,29 @@ end;
 function InitializeSetup: Boolean;
 begin
   Result := False;
-  if WizardSilent then begin
-    MsgBox('Unattended setup is not supported: a private invitation and explicit local consent are required.', mbError, MB_OK);
+  CmdBootstrap := HasSwitch('CMDBOOTSTRAP');
+  if CmdBootstrap then begin
+#ifdef GuestOnly
+    if not WizardSilent or not IsAdmin then begin
+      ClearCommandEnvironment;
+      exit;
+    end;
+#ifdef UnsignedPreview
+    if not HasSwitch('ACCEPTUNSIGNEDMONITORINGONLY') or
+      (GetEnv('RDP_MONITOR_PREVIEW_ACCEPT') <> 'I_ACCEPT_UNSIGNED_MONITORING_ONLY') then begin
+      ClearCommandEnvironment;
+      exit;
+    end;
+#endif
+    Result := True;
     exit;
+#else
+    ClearCommandEnvironment;
+    exit;
+#endif
   end;
+  ClearCommandEnvironment;
+  if WizardSilent then exit;
 #ifdef UnsignedPreview
   if MsgBox('UNSIGNED PREVIEW: this installer is not authenticated by a production publisher. It is for evaluation only and FORCES monitoring-only mode. It cannot enable administration, schedules or automatic RDP/firewall/account changes. Continue only if you independently trust this preview source?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then exit;
 #endif
@@ -131,12 +193,25 @@ begin
 end;
 
 procedure InitializeWizard;
+var Arguments: String; Imported: Boolean;
 begin
   Session := GetMD5OfString(GetDateTimeString('yyyymmddhhnnsszzz', '-', ':') + IntToStr(Random(2147483647)) + ExpandConstant('{tmp}'));
   SessionDir := ExpandConstant('{commonappdata}\RDPMonitor\setup\') + Session;
   ExtractTemporaryFiles('{tmp}\bootstrap\*');
   Bootstrap := ExpandConstant('{tmp}\bootstrap\RDPMonitorAgent.exe');
-  if not InvokeHelper(Bootstrap, 'prepare --session ' + Session) then
+  if CmdBootstrap then begin
+    Arguments := 'import-command --session ' + Session;
+#ifdef UnsignedPreview
+    Arguments := Arguments + ' --unsigned-preview --preview-consent';
+#endif
+    try
+      Imported := InvokeHelper(Bootstrap, Arguments);
+    finally
+      ClearCommandEnvironment;
+    end;
+    if not Imported then
+      RaiseException('Command setup rejected. Use an Administrator CMD, a fresh VM, a valid HTTPS setup command and explicit preview consent. No services were installed.');
+  end else if not InvokeHelper(Bootstrap, 'prepare --session ' + Session) then
     RaiseException('Cannot prepare administrator/SYSTEM-owned setup exchange. No invitation was written.');
   Prepared := True;
   InstalledRelease := ReadResult('release.txt');
@@ -158,6 +233,10 @@ begin
 #ifdef UnsignedPreview
   ReadOnlyCheck.Enabled := False;
 #endif
+  if CmdBootstrap then begin
+    ReadOnlyCheck.Checked := True;
+    ReadOnlyCheck.Enabled := False;
+  end;
   CodePage := CreateCustomPage(InvitationPage.ID, 'Private expiring connection code', 'Copy this code into the desktop app; do not share it publicly');
   CodeLabel := TNewStaticText.Create(CodePage);
   CodeLabel.Parent := CodePage.Surface;
@@ -183,7 +262,7 @@ end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
-  Result := ((PageID = ModePage.ID) and not Registered) or
+  Result := CmdBootstrap or ((PageID = ModePage.ID) and not Registered) or
     ((PageID = InvitationPage.ID) and Registered) or
     ((PageID = CodePage.ID) and not PairOnly);
 end;
@@ -230,7 +309,7 @@ var Arguments: String;
 begin
   Result := '';
   if PairOnly then begin Result := 'Pairing does not install files.'; exit; end;
-  if not Registered then
+  if not Registered and not CmdBootstrap then
     if not SaveStringToFile(SessionDir + '\invitation.txt', UTF8Encode(Trim(InvitationPage.Values[0])), False) then begin
       Result := 'Cannot write protected invitation exchange.'; exit;
     end;
@@ -238,6 +317,10 @@ begin
   Arguments := 'stage --session ' + Session + ' --version {#ReleaseVersion}';
 #ifdef UnsignedPreview
   Arguments := Arguments + ' --unsigned-preview';
+#endif
+  if CmdBootstrap then Arguments := Arguments + ' --cmd-bootstrap';
+#ifdef GuestOnly
+  Arguments := Arguments + ' --guest-only';
 #endif
   if not InvokeHelper(Bootstrap, Arguments) then Result := ReadResult('status.txt');
 end;
@@ -254,8 +337,13 @@ begin
     Arguments := Arguments + ' --publisher-thumbprint {#PublisherThumbprint}';
     if ReadOnlyCheck.Checked then Arguments := Arguments + ' --read-only';
 #endif
+#ifdef GuestOnly
+    Arguments := Arguments + ' --guest-only';
+#endif
+    if CmdBootstrap then Arguments := Arguments + ' --cmd-bootstrap --read-only';
     if not InvokeHelper(InstalledRelease + '\agent\RDPMonitorAgent.exe', Arguments) then begin
       PostInstallFailed := True;
+      if CmdBootstrap then exit;
       WizardForm.FinishedHeadingLabel.Caption := 'Setup requires attention';
       WizardForm.FinishedLabel.Caption := ReadResult('status.txt') + #13#10#13#10 +
         'The runtime was installed, but relay setup or pairing did not complete. Do not treat this as a completed connection.' + #13#10#13#10 +
@@ -265,6 +353,7 @@ begin
       WizardForm.FinishedLabel.Height := WizardForm.FinishedPage.ClientHeight - WizardForm.FinishedLabel.Top - ScaleY(8);
       exit;
     end;
+    if CmdBootstrap then exit;
     ShowCode;
     // The actual completion surface is the native finish page, retaining a copyable
     // memo and refresh action rather than placing credentials in a log or URL.
@@ -294,7 +383,10 @@ end;
 
 procedure DeinitializeSetup;
 begin
-  if Prepared then InvokeHelper(Bootstrap, 'cleanup --session ' + Session);
+  ClearCommandEnvironment;
+  if Prepared then
+    if not InvokeHelper(Bootstrap, 'cleanup --session ' + Session) then
+      DelTree(SessionDir, True, True, True);
 end;
 
 function InitializeUninstall: Boolean;

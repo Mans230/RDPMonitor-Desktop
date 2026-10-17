@@ -44,7 +44,7 @@ function Assert-NoReparse([string]$Path) {
         if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point forbidden: $($child.FullName)" }
     }
 }
-function Read-Release([string]$Package, [string]$PublisherThumbprint, [string]$PinnedCertificate) {
+function Read-Release([string]$Package, [string]$PublisherThumbprint, [string]$PinnedCertificate, [ValidateSet('suite','guest')][string]$Component = 'suite') {
     $Package = [IO.Path]::GetFullPath($Package)
     Assert-NoReparse $Package
     $certificatePath = Join-Path $Package 'publisher.cer'
@@ -68,6 +68,9 @@ function Read-Release([string]$Package, [string]$PublisherThumbprint, [string]$P
     $manifest = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
     if ($manifest.format -ne 1 -or $manifest.api -ne 1 -or $manifest.platform -ne 'windows-x64' -or -not $manifest.files) { throw 'Incompatible release manifest.' }
     if ($manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Release version must be numeric major.minor.patch.' }
+    $declaredComponent = if ($manifest.PSObject.Properties.Name -contains 'component') { [string]$manifest.component } else { 'suite' }
+    if ($declaredComponent -ne $Component) { throw "Release component mismatch; expected $Component." }
+    if ($Component -eq 'guest' -and (Test-Path -LiteralPath (Join-Path $Package 'client'))) { throw 'Guest release must not contain a desktop client.' }
     $expectedFiles = @{}
     foreach ($entry in $manifest.files) {
         if ($entry.path -match '(^[\\/]|:|(^|[\\/])\.\.([\\/]|$))') { throw 'Unsafe release manifest path.' }
@@ -87,8 +90,10 @@ function Read-Release([string]$Package, [string]$PublisherThumbprint, [string]$P
         if ($relative -in @('release.json','release.sig','publisher.cer')) { continue }
         if (-not $expectedFiles.ContainsKey($relative)) { throw "Unmanifested release file: $relative" }
     }
-    foreach ($required in @('agent\RDPMonitorAgent.exe','client\rdpmonitor.exe','scripts\install_suite.ps1','scripts\update-agent.ps1','scripts\deployment-common.ps1')) {
-        if (-not $expectedFiles.ContainsKey($required)) { throw "Incomplete coherent agent/client release: $required" }
+    $requiredFiles = @('agent\RDPMonitorAgent.exe','scripts\install_suite.ps1','scripts\update-agent.ps1','scripts\deployment-common.ps1')
+    if ($Component -eq 'suite') { $requiredFiles += 'client\rdpmonitor.exe' }
+    foreach ($required in $requiredFiles) {
+        if (-not $expectedFiles.ContainsKey($required)) { throw "Incomplete coherent $Component release: $required" }
     }
     return $manifest
 }
@@ -129,12 +134,14 @@ function Save-Deployment($Value) {
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     New-Item -Path $runKey -Force | Out-Null
     New-ItemProperty -LiteralPath $runKey -Name 'RDPMonitorSessionHelper' -PropertyType String -Force -Value ('"' + $powershell + '" -NoProfile -WindowStyle Hidden -File "' + $launcher + '"') | Out-Null
-    $shortcutPath = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RDPMonitor.lnk'
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = Join-Path $Value.release 'client\rdpmonitor.exe'
-    $shortcut.WorkingDirectory = Join-Path $Value.release 'client'
-    $shortcut.Save()
+    if ($Value.component -ne 'guest') {
+        $shortcutPath = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\RDPMonitor.lnk'
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = Join-Path $Value.release 'client\rdpmonitor.exe'
+        $shortcut.WorkingDirectory = Join-Path $Value.release 'client'
+        $shortcut.Save()
+    }
 }
 function Copy-ProtectedRelease([string]$Package, [string]$Destination) {
     Set-ProtectedDirectory $Destination -Code
